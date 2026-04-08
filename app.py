@@ -72,14 +72,15 @@ st.title("🏗️ Gêmeo Digital: Inteligência Operacional")
 
 if not supabase: st.stop()
 
-aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama", "⚙️ Configurações"])
+aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama (CRUD)", "⚙️ Configurações"])
 
+# --- ABA 1: CRIAÇÃO ---
 with aba_reg:
-    with st.form("registro_vfinal", clear_on_submit=True):
+    with st.form("form_create", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
         data_f = c1.date_input("Data:", value=datetime.date.today())
         cats = carregar_categorias()
-        nomes = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditória", "Gestão"]
+        nomes = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditória"]
         cat_f = c2.selectbox("Domínio:", nomes)
         comp_f = c3.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
         gatilho_f = st.text_input("Gatilho:")
@@ -92,65 +93,102 @@ with aba_reg:
                         "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "gatilho": gatilho_f,
                         "complexidade": comp_f, "descricao": texto_final, "mapeamento_ia": analise
                     }).execute()
-                    st.success("✅ Salvo!")
-                    st.markdown(f"**Análise:**\n{analise}")
+                    st.success("✅ Registro Criado!")
+                    st.rerun()
 
+# --- ABA 2: LEITURA, EDIÇÃO E EXCLUSÃO (CRUD) ---
 with aba_dash:
-    st.subheader("📊 Panorama de Processos")
+    st.subheader("📊 Gestão de Processos")
     res = supabase.table("registros").select("*").order("created_at", desc=True).execute()
     
     if res.data:
         df = pd.DataFrame(res.data)
         
-        # --- SISTEMA DE DELEÇÃO EM MASSA OTIMIZADO ---
-        with st.expander("🗑️ Limpeza de Registros", expanded=True):
-            col_sel1, col_sel2 = st.columns([1, 4])
-            
-            # Checkbox para selecionar tudo
-            selecionar_tudo = col_sel1.checkbox("Selecionar Todos")
-            
-            todos_ids = df['id'].tolist()
-            default_selecao = todos_ids if selecionar_tudo else []
-            
-            ids_para_deletar = st.multiselect(
-                "IDs para exclusão:",
-                options=todos_ids,
-                default=default_selecao,
-                format_func=lambda x: f"ID {x} - {df[df['id']==x]['descricao'].iloc[0][:50]}..."
-            )
-            
-            if st.button("🔴 Confirmar Exclusão em Massa", type="primary"):
-                if ids_para_deletar:
-                    with st.spinner(f"Excluindo {len(ids_para_deletar)} registros..."):
-                        # Deleção eficiente usando o operador 'in' do Supabase
-                        supabase.table("registros").delete().in_("id", ids_para_deletar).execute()
-                    st.success(f"Sucesso: {len(ids_para_deletar)} registros removidos.")
-                    st.rerun()
-                else:
-                    st.warning("Nenhum item selecionado.")
+        # Barra de Ferramentas
+        col_btn1, col_btn2, _ = st.columns([2, 2, 6])
+        if col_btn1.button("🔄 Atualizar"): st.rerun()
+        
+        # Tabela Customizada com Checkbox
+        st.write("---")
+        
+        # Estado para seleção em massa
+        if 'selecionados' not in st.session_state: st.session_state.selecionados = []
 
-        # Tabela nativa do Streamlit
-        st.dataframe(df, use_container_width=True)
+        # Cabeçalho manual para controle total
+        h = st.columns([0.5, 1, 1.5, 1.5, 1, 3, 1])
+        h[0].write("**Sel.**")
+        h[1].write("**ID**")
+        h[2].write("**Data**")
+        h[3].write("**Domínio**")
+        h[4].write("**Comp.**")
+        h[5].write("**Descrição**")
+        h[6].write("**Ação**")
+
+        selecao_atual = []
+
+        for _, row in df.iterrows():
+            c = st.columns([0.5, 1, 1.5, 1.5, 1, 3, 1])
+            
+            # 1. Seleção (Checkbox)
+            if c[0].checkbox("", key=f"sel_{row['id']}"):
+                selecao_atual.append(row['id'])
+            
+            # 2. Dados
+            c[1].write(row['id'])
+            c[2].write(row['data'])
+            c[3].write(row['dominio'])
+            c[4].write(row['complexidade'])
+            c[5].write(row['descricao'][:80] + "...")
+            
+            # 3. Edição (Botão que abre Modal/Expander)
+            if c[6].button("📝", key=f"edit_{row['id']}"):
+                st.session_state[f"editing_{row['id']}"] = True
+
+            # Formulário de Edição (aparece abaixo da linha se clicado)
+            if st.session_state.get(f"editing_{row['id']}", False):
+                with st.expander(f"Editando Registro #{row['id']}", expanded=True):
+                    with st.form(f"f_edit_{row['id']}"):
+                        ed_gatilho = st.text_input("Gatilho", value=row['gatilho'])
+                        ed_desc = st.text_area("Descrição", value=row['descricao'])
+                        if st.form_submit_button("Salvar Alterações"):
+                            supabase.table("registros").update({
+                                "gatilho": ed_gatilho, "descricao": ed_desc
+                            }).eq("id", row['id']).execute()
+                            st.session_state[f"editing_{row['id']}"] = False
+                            st.rerun()
+                        if st.form_submit_button("Cancelar"):
+                            st.session_state[f"editing_{row['id']}"] = False
+                            st.rerun()
+
+        st.write("---")
+        
+        # Ações em Massa no final
+        if selecao_atual:
+            if st.button(f"🔴 Excluir {len(selecao_atual)} selecionados", type="primary"):
+                supabase.table("registros").delete().in_("id", selecao_atual).execute()
+                st.success("Excluído com sucesso!")
+                st.rerun()
     else:
-        st.info("Nenhum dado para exibir.")
+        st.info("Nenhum dado.")
 
+# --- ABA 3: CONFIGURAÇÕES ---
 with aba_conf:
-    st.subheader("⚙️ Configurações")
+    st.subheader("⚙️ Configurações de Sistema")
     c_l, c_r = st.columns(2)
     with c_l:
         st.write("### 📁 Domínios")
         n_c = st.text_input("Nova Categoria:")
-        if st.button("Add Cat"):
+        if st.button("Add"):
             if n_c: supabase.table("categorias").insert({"nome": n_c.strip()}).execute(); st.rerun()
-        for c in carregar_categorias():
+        for cat in carregar_categorias():
             col1, col2 = st.columns([4, 1])
-            col1.text(c['nome'])
-            if col2.button("🗑️", key=f"dc_{c['id']}"):
-                supabase.table("categorias").delete().eq("id", c['id']).execute(); st.rerun()
+            col1.text(cat['nome'])
+            if col2.button("🗑️", key=f"dc_{cat['id']}"):
+                supabase.table("categorias").delete().eq("id", cat['id']).execute(); st.rerun()
     with c_r:
         st.write("### 🔑 Chaves")
         n_k = st.text_input("Nova Chave:", type="password")
-        if st.button("Add Key"):
+        if st.button("Salvar Chave"):
             if n_k.startswith("gsk_"): supabase.table("config_chaves").insert({"chave": n_k.strip()}).execute(); st.rerun()
         for k in carregar_chaves_db():
             col1, col2 = st.columns([4, 1])
