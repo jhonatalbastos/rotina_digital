@@ -6,34 +6,35 @@ import requests
 import random
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Gêmeo Digital Online", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="Gêmeo Digital - Mapeamento", page_icon="🏗️", layout="wide")
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNÇÃO PARA PEGAR TODAS AS CHAVES (Secrets + Planilha) ---
-def buscar_pool_de_chaves():
-    # 1. Pega as chaves fixas do Secret
+# --- FUNÇÃO PARA CONSOLIDAR POOL DE CHAVES (Secrets + Planilha) ---
+def buscar_todas_as_chaves():
+    # 1. Carrega chaves mestras dos Secrets
     try:
-        keys_secret = st.secrets["GROQ_KEYS"].split("\n")
-        chaves = [k.strip() for k in keys_secret if k.strip()]
+        secret_keys = st.secrets["GROQ_KEYS"].split("\n")
+        pool = [k.strip() for k in secret_keys if k.strip()]
     except:
-        chaves = []
+        pool = []
 
-    # 2. Tenta pegar as chaves extras da Planilha (Aba chamada 'Config')
+    # 2. Carrega chaves extras da aba 'Config' da planilha
     try:
         df_config = conn.read(worksheet="Config")
-        chaves_extra = df_config["Chaves"].tolist()
-        chaves.extend([str(k).strip() for k in chaves_extra if str(k).strip()])
+        if not df_config.empty and "Chaves" in df_config.columns:
+            extras = df_config["Chaves"].dropna().astype(str).tolist()
+            pool.extend([k.strip() for k in extras if k.strip()])
     except:
-        pass # Se não existir a aba Config, ignora
+        pass 
         
-    return list(set(chaves)) # Remove duplicatas
+    return list(set(pool)) # Remove duplicatas para não gastar requests à toa
 
 # --- LÓGICA DE INTELIGÊNCIA ---
 def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=None):
-    chaves = buscar_pool_de_chaves()
-    if not chaves: return "Erro: Sem chaves configuradas.", texto
+    chaves = buscar_todas_as_chaves()
+    if not chaves: return "⚠️ Nenhuma chave Groq configurada.", texto
     
     random.shuffle(chaves)
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -43,12 +44,14 @@ def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=Non
     for chave in chaves:
         headers = {"Authorization": f"Bearer {chave}"}
         try:
+            # Transcrição de Voz
             if audio_file:
                 files = {"file": ("audio.wav", audio_file, "audio/wav"), "model": (None, "whisper-large-v3")}
                 res_audio = requests.post(url_transcreve, headers=headers, files=files)
                 if res_audio.status_code == 200:
-                    texto_final = f"[Voz]: {res_audio.json()['text']}\n{texto}"
+                    texto_final = f"[Transcrição]: {res_audio.json()['text']}\n{texto}"
 
+            # Análise de Engenharia de Processo
             payload = {
                 "model": "llama-3.3-70b-specdec",
                 "messages": [
@@ -60,40 +63,64 @@ def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=Non
             res = requests.post(url, headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"}, json=payload)
             if res.status_code == 200:
                 return res.json()['choices'][0]['message']['content'], texto_final
+            elif res.status_code == 429: continue
         except: continue
-    return "Falha na análise.", texto_final
+    return "❌ Erro nas chaves Groq.", texto_final
 
 # --- INTERFACE ---
-st.title("🏗️ Gêmeo Digital: Mapeamento Seguro")
+st.title("🏗️ Gêmeo Digital: Inteligência Operacional")
 
-aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Atividade", "📊 Panorama", "⚙️ Configurações"])
+aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama", "⚙️ Configurações"])
 
 with aba_reg:
-    # ... (Mesmo formulário de registro anterior)
-    st.write("Formulário de registro aqui...")
+    with st.form("form_mapping", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        data_sel = c1.date_input("Data:", value=datetime.date.today())
+        cat_sel = c2.selectbox("Domínio:", ["Rotina Contábil", "Auditoria", "Gestão", "Fiscal"])
+        comp_sel = c3.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
+        
+        gatilho = st.text_input("Gatilho (O que iniciou isso?):")
+        audio_in = st.audio_input("Grave sua lógica")
+        descricao = st.text_area("Descrição do Processo:")
+        
+        if st.form_submit_button("Sincronizar com Nuvem"):
+            with st.spinner("IA Processando..."):
+                analise, texto_full = analisar_processo_ia(descricao, cat_sel, gatilho, comp_sel, audio_file=audio_in)
+                
+                # Salva na aba principal (Página1)
+                novo_dado = pd.DataFrame([{"Data": data_sel.strftime("%d/%m/%Y"), "Dominio": cat_sel, "Gatilho": gatilho, "Complexidade": comp_sel, "Descricao": texto_full, "Mapeamento_IA": analise}])
+                df_main = conn.read(worksheet="Página1")
+                df_final = pd.concat([df_main, novo_dado], ignore_index=True)
+                conn.update(worksheet="Página1", data=df_final)
+                
+                st.success("Mapeamento realizado!")
+                st.markdown(f"### 🤖 DNA do Processo:\n{analise}")
 
 with aba_dash:
-    # ... (Mesmo panorama anterior)
-    st.write("Panorama de processos aqui...")
+    st.subheader("📊 Panorama de Processos")
+    try:
+        df_view = conn.read(worksheet="Página1")
+        st.dataframe(df_view.iloc[::-1], use_container_width=True)
+    except: st.info("Sem dados registrados.")
 
 with aba_conf:
-    st.subheader("⚙️ Gestão de Inteligência")
+    st.subheader("⚙️ Configurações de Inteligência")
     
-    # Adicionar nova chave via App
+    # Adicionar chave nova
     st.markdown("### 🔑 Adicionar Chave Groq Extra")
-    nova_chave = st.text_input("Cole a nova chave gsk_... aqui:", type="password")
+    nova_key = st.text_input("Cole a nova chave gsk_...", type="password")
     
-    if st.button("Salvar Chave na Nuvem"):
-        if nova_chave.startswith("gsk_"):
-            try:
-                # Tenta ler a aba 'Config', se não existir, cria
-                df_keys = pd.DataFrame([{"Chaves": nova_chave}])
-                # Aqui você precisaria ter uma aba chamada 'Config' na sua planilha
-                st.success("Chave salva na planilha com sucesso! Ela será usada no próximo rodízio.")
-            except Exception as e:
-                st.error(f"Erro ao salvar: {e}")
+    if st.button("Salvar Chave na Planilha"):
+        if nova_key.startswith("gsk_"):
+            df_config = conn.read(worksheet="Config")
+            # Adiciona a nova chave à coluna 'Chaves'
+            novo_key_df = pd.DataFrame([{"Chaves": nova_key}])
+            df_config_final = pd.concat([df_config, novo_key_df], ignore_index=True)
+            conn.update(worksheet="Config", data=df_config_final)
+            st.success("Chave salva com sucesso na aba Config!")
+            st.rerun()
         else:
-            st.warning("Formato de chave inválido.")
+            st.error("Formato inválido.")
 
     st.divider()
-    st.write(f"📡 Chaves ativas no momento: {len(buscar_pool_de_chaves())}")
+    st.write(f"📡 Total de chaves em rodízio: **{len(buscar_todas_as_chaves())}**")
