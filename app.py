@@ -4,7 +4,6 @@ import pandas as pd
 import datetime
 import requests
 import random
-import json
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Gêmeo Digital: Inteligência Operacional", page_icon="🏗️", layout="wide")
@@ -48,36 +47,25 @@ def buscar_pool_chaves_total():
 def analisar_processo_ia(texto, categoria, gatilho, complexidade):
     chaves = buscar_pool_chaves_total()
     if not chaves: return "⚠️ Sem chaves no sistema.", texto
-    
     random.shuffle(chaves)
-    
     for chave in chaves:
         try:
             response = requests.post(
                 "https://api.groq.com/openai/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {chave.strip()}",
-                    "Content-Type": "application/json"
-                },
+                headers={"Authorization": f"Bearer {chave.strip()}", "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": "Você é um Engenheiro de Processos especialista. Analise a rotina operacional."},
-                        {"role": "user", "content": f"Domínio: {categoria} | Gatilho: {gatilho} | Complexidade: {complexidade}\nProcesso: {texto}"}
+                        {"role": "system", "content": "Você é um Engenheiro de Processos especialista."},
+                        {"role": "user", "content": f"Domínio: {categoria} | Gatilho: {gatilho} | Processo: {texto}"}
                     ],
                     "temperature": 0.3
-                },
-                timeout=20
+                }, timeout=20
             )
-            
             if response.status_code == 200:
                 return response.json()['choices'][0]['message']['content'], texto
-            else:
-                continue
-        except:
-            continue
-
-    return "❌ Falha na comunicação com a IA.", texto
+        except: continue
+    return "❌ Falha na IA.", texto
 
 # --- INTERFACE ---
 st.title("🏗️ Gêmeo Digital: Inteligência Operacional")
@@ -86,115 +74,76 @@ if not supabase: st.stop()
 
 aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama", "⚙️ Configurações"])
 
-# --- ABA 1: REGISTRO ---
 with aba_reg:
-    with st.form("registro_final", clear_on_submit=True):
+    with st.form("registro_vfinal", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
         data_f = c1.date_input("Data:", value=datetime.date.today())
-        
         cats = carregar_categorias()
         nomes = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditória", "Gestão"]
         cat_f = c2.selectbox("Domínio:", nomes)
         comp_f = c3.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
-        
         gatilho_f = st.text_input("Gatilho:")
-        desc_f = st.text_area("Descrição do Processo (Obrigatório):")
-        
+        desc_f = st.text_area("Descrição do Processo:")
         if st.form_submit_button("Sincronizar com Cloud"):
-            if not desc_f:
-                st.error("Preencha a descrição do processo.")
-            else:
+            if desc_f:
                 with st.spinner("IA Analisando..."):
                     analise, texto_final = analisar_processo_ia(desc_f, cat_f, gatilho_f, comp_f)
-                    try:
-                        supabase.table("registros").insert({
-                            "data": data_f.strftime("%Y-%m-%d"),
-                            "dominio": cat_f,
-                            "gatilho": gatilho_f,
-                            "complexidade": comp_f,
-                            "descricao": texto_final,
-                            "mapeamento_ia": analise
-                        }).execute()
-                        st.success("✅ Dados salvos com sucesso!")
-                        st.markdown(f"**Análise Gerada:**\n{analise}")
-                    except Exception as e:
-                        st.error(f"Erro no banco: {e}")
+                    supabase.table("registros").insert({
+                        "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "gatilho": gatilho_f,
+                        "complexidade": comp_f, "descricao": texto_final, "mapeamento_ia": analise
+                    }).execute()
+                    st.success("✅ Salvo!")
+                    st.markdown(f"**Análise:**\n{analise}")
 
-# --- ABA 2: PANORAMA (COM FUNÇÃO DE DELETAR) ---
 with aba_dash:
     st.subheader("📊 Panorama de Processos")
-    if st.button("🔄 Atualizar Histórico"): st.rerun()
+    res = supabase.table("registros").select("*").order("created_at", desc=True).execute()
     
-    try:
-        res = supabase.table("registros").select("*").order("created_at", desc=True).execute()
-        if res.data:
-            df = pd.DataFrame(res.data)
+    if res.data:
+        df = pd.DataFrame(res.data)
+        
+        # --- SISTEMA DE DELEÇÃO EM MASSA ---
+        with st.expander("🗑️ Limpeza de Registros (Deleção em Massa)"):
+            ids_para_deletar = st.multiselect(
+                "Selecione os IDs que deseja excluir:",
+                options=df['id'].tolist(),
+                format_func=lambda x: f"ID {x} - {df[df['id']==x]['descricao'].iloc[0][:50]}..."
+            )
             
-            # Cabeçalho da tabela customizada
-            cols = st.columns([1, 2, 2, 2, 1, 4, 1])
-            cols[0].write("**ID**")
-            cols[1].write("**Data**")
-            cols[2].write("**Domínio**")
-            cols[3].write("**Gatilho**")
-            cols[4].write("**Comp.**")
-            cols[5].write("**Descrição**")
-            cols[6].write("**Ação**")
-
-            st.write("---")
-
-            for index, row in df.iterrows():
-                c = st.columns([1, 2, 2, 2, 1, 4, 1])
-                c[0].write(row['id'])
-                c[1].write(row['data'])
-                c[2].write(row['dominio'])
-                c[3].write(row['gatilho'])
-                c[4].write(row['complexidade'])
-                c[5].write(row['descricao'][:100] + "...") # Preview do texto
-                
-                # Botão de deletar para cada linha
-                if c[6].button("🗑️", key=f"del_reg_{row['id']}"):
-                    supabase.table("registros").delete().eq("id", row['id']).execute()
-                    st.success(f"Registro {row['id']} removido!")
+            if st.button("🔴 Excluir Registros Selecionados", type="primary"):
+                if ids_para_deletar:
+                    for id_del in ids_para_deletar:
+                        supabase.table("registros").delete().eq("id", id_del).execute()
+                    st.success(f"{len(ids_para_deletar)} registros apagados!")
                     st.rerun()
-        else:
-            st.info("Nenhum registro encontrado.")
-    except Exception as e:
-        st.error(f"Erro ao carregar dados: {e}")
+                else:
+                    st.warning("Selecione pelo menos um registro.")
 
-# --- ABA 3: CONFIGURAÇÕES ---
+        # Tabela original (linda e funcional)
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.info("Nenhum dado para exibir.")
+
 with aba_conf:
-    st.subheader("⚙️ Painel Administrativo")
-    
-    col_left, col_right = st.columns(2)
-    
-    with col_left:
+    st.subheader("⚙️ Configurações")
+    c_l, c_r = st.columns(2)
+    with c_l:
         st.write("### 📁 Domínios")
-        new_c = st.text_input("Novo Domínio:")
-        if st.button("Adicionar Categoria"):
-            if new_c:
-                supabase.table("categorias").insert({"nome": new_c.strip()}).execute()
-                st.rerun()
-        
-        st.write("---")
-        for cat in carregar_categorias():
-            c1, c2 = st.columns([4, 1])
-            c1.text(cat['nome'])
-            if c2.button("🗑️", key=f"d_cat_{cat['id']}"):
-                supabase.table("categorias").delete().eq("id", cat['id']).execute()
-                st.rerun()
-
-    with col_right:
-        st.write("### 🔑 Pool de Chaves")
-        new_k = st.text_input("Adicionar Chave Groq:", type="password")
-        if st.button("Salvar Chave"):
-            if new_k.startswith("gsk_"):
-                supabase.table("config_chaves").insert({"chave": new_k.strip()}).execute()
-                st.rerun()
-        
-        st.write("---")
+        n_c = st.text_input("Nova Categoria:")
+        if st.button("Add Cat"):
+            if n_c: supabase.table("categorias").insert({"nome": n_c}).execute(); st.rerun()
+        for c in carregar_categorias():
+            col1, col2 = st.columns([4, 1])
+            col1.text(c['nome'])
+            if col2.button("🗑️", key=f"dc_{c['id']}"):
+                supabase.table("categorias").delete().eq("id", c['id']).execute(); st.rerun()
+    with c_r:
+        st.write("### 🔑 Chaves")
+        n_k = st.text_input("Nova Chave:", type="password")
+        if st.button("Add Key"):
+            if n_k.startswith("gsk_"): supabase.table("config_chaves").insert({"chave": n_k}).execute(); st.rerun()
         for k in carregar_chaves_db():
-            c1, c2 = st.columns([4, 1])
-            c1.text(f"Ativa: {k['chave'][:12]}...")
-            if c2.button("🗑️", key=f"d_key_{k['id']}"):
-                supabase.table("config_chaves").delete().eq("id", k['id']).execute()
-                st.rerun()
+            col1, col2 = st.columns([4, 1])
+            col1.text(f"Ativa: {k['chave'][:12]}...")
+            if col2.button("🗑️", key=f"dk_{k['id']}"):
+                supabase.table("config_chaves").delete().eq("id", k['id']).execute(); st.rerun()
