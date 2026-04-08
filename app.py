@@ -88,17 +88,17 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
     equipe = carregar_equipe()
     docs = carregar_documentos()
     
-    ctx_equipe = "\n".join([f"- {m['nome']} ({m['cargo']}) - {m['posicao']}" for m in equipe])
+    # Contextualização avançada: Identifica quem enviou se o e-mail estiver na base
+    ctx_equipe = "\n".join([f"- {m['nome']} ({m['cargo']}) | E-mail: {m['email']} | Papel: {m['posicao']}" for m in equipe])
     ctx_doc = "\n".join([f"- {d['titulo']}: {d['resumo_ia']}" for d in docs[:2]])
     
     prompt = f"""
-    Atue como o Gêmeo Digital de {perfil.get('nome_profissional', 'Jhonata Leal Bastos')}, {perfil.get('cargo', 'Gerente Financeiro e Contador')}.
+    Você é o Assistente Estratégico de {perfil.get('nome_profissional', 'Jhonata Leal Bastos')}, {perfil.get('cargo', 'Gerente Financeiro e Contador')}.
     Contexto FECD: {perfil.get('certificacoes', 'Auditor QTG')}.
-    Estrutura de Equipe: {ctx_equipe}.
+    Mapeamento de Equipe (Use para identificar remetentes): {ctx_equipe}.
     Base Técnica: {ctx_doc}.
     
-    Sua missão: Analisar a atividade abaixo para otimização de processos e mapeamento de carga horária. 
-    Seja técnico, direto e sugira melhorias baseadas no GTD.
+    Sua missão: Analisar a atividade, identificar se o remetente é um superior ou parceiro e sugerir a melhor abordagem técnica e produtiva (GTD).
     Atividade: {texto}
     """
     
@@ -133,7 +133,7 @@ with tab_reg:
         orig_f = col3.selectbox("Origem da Demanda:", lista_origs if lista_origs else ["E-mail"])
         
         comp_f = st.select_slider("Nível de Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
-        desc_f = st.text_area("Descreva a atividade detalhadamente:")
+        desc_f = st.text_area("Descreva a atividade ou cole o e-mail recebido:")
         
         if st.form_submit_button("🚀 Sincronizar com Inteligência Cloud"):
             if desc_f:
@@ -158,7 +158,6 @@ with tab_pan:
         if c_refresh.button("🔄 Atualizar"): st.rerun()
         
         st.write("---")
-        # Cabeçalho da Tabela
         h = st.columns([0.4, 0.6, 1.0, 1.2, 1.2, 0.8, 3.0, 0.6, 0.6])
         titulos = ["Sel.", "ID", "Data", "Domínio", "Origem", "Comp.", "Descrição", "Edit", "Ver"]
         for i, t in enumerate(titulos): h[i].write(f"**{t}**")
@@ -177,7 +176,6 @@ with tab_pan:
             if c[7].button("📝", key=f"btn_ed_{row['id']}"): st.session_state[f"edit_mode_{row['id']}"] = True
             if c[8].button("🔍", key=f"btn_vw_{row['id']}"): st.info(row['mapeamento_ia'])
 
-            # Formulário de Edição em linha
             if st.session_state.get(f"edit_mode_{row['id']}", False):
                 with st.expander(f"Editar Atividade #{row['id']}", expanded=True):
                     with st.form(f"form_ed_{row['id']}"):
@@ -212,7 +210,7 @@ with tab_perf:
                 n_p = st.text_input("Nome Completo:", value=perfil.get('nome_profissional', ''))
                 c_p = st.text_input("Cargo Atual:", value=perfil.get('cargo', ''))
                 cert_p = st.text_area("Certificações Técnicas:", value=perfil.get('certificacoes', ''))
-                meta_p = st.text_area("Metas Estratégicas (Ex: Home Office 2026):", value=perfil.get('metas_estrategicas', ''))
+                meta_p = st.text_area("Metas Estratégicas:", value=perfil.get('metas_estrategicas', ''))
                 if st.form_submit_button("Salvar Meu Perfil"):
                     supabase.table("perfil_contexto").upsert({
                         "id": 1, "nome_profissional": n_p, "cargo": c_p, 
@@ -223,7 +221,7 @@ with tab_perf:
         st.write("### 👥 Adicionar Membro à Equipe")
         with st.form("form_add_equipe", clear_on_submit=True):
             nm = st.text_input("Nome:"); cg = st.text_input("Cargo:"); em = st.text_input("E-mail:")
-            ps = st.selectbox("Posição Hierárquica:", ["Superior", "Mesmo Nível (Par)", "Subordinado"])
+            ps = st.selectbox("Posição Hierárquica:", ["Superior", "Mesmo Nível (Par)", "Subordinado", "Prestador de Serviço"])
             if st.form_submit_button("Adicionar Membro"):
                 if nm and cg:
                     supabase.table("equipe_organograma").insert({"nome": nm, "cargo": cg, "email": em, "posicao": ps}).execute()
@@ -240,8 +238,14 @@ with tab_perf:
 
     with col_vis:
         st.write("### 🌲 Organograma Dinâmico")
-        def card(n, c, e, color):
-            st.markdown(f'<div style="border:1px solid #ddd; border-radius:10px; padding:15px; margin-bottom:10px; background:{color}; border-left:6px solid #ff4b4b;"><b>{n.upper()}</b><br><small>{c}</small><br><code style="font-size:0.8em; color:#0068c9;">{e}</code></div>', unsafe_allow_html=True)
+        def card(n, c, e, color, border_style="solid"):
+            st.markdown(f'''
+                <div style="border:1px {border_style} #ddd; border-radius:10px; padding:15px; margin-bottom:10px; background:{color}; border-left:6px {border_style} #ff4b4b;">
+                    <b>{n.upper()}</b><br>
+                    <small>{c}</small><br>
+                    <code style="font-size:0.8em; color:#0068c9;">{e}</code>
+                </div>
+            ''', unsafe_allow_html=True)
 
         sups = [m for m in equipe if m['posicao'] == "Superior"]
         if sups:
@@ -253,11 +257,23 @@ with tab_perf:
         card(perfil.get('nome_profissional', 'Você'), perfil.get('cargo', 'Seu Cargo'), "Seu E-mail", "#fff4f4")
         
         subs = [m for m in equipe if m['posicao'] == "Subordinado"]
+        pares = [m for m in equipe if m['posicao'] == "Mesmo Nível (Par)"]
+        
+        if pares:
+            st.caption("↔️ Colegas / Mesmo Nível")
+            for p in pares: card(p['nome'], p['cargo'], p['email'], "#ffffff")
+
         if subs:
             st.write("↓"); st.caption("⬇️ Subordinados / Apoio")
             cols = st.columns(len(subs))
             for i, s in enumerate(subs):
                 with cols[i]: card(s['nome'], s['cargo'], s['email'], "#f1fff1")
+
+        prests = [m for m in equipe if m['posicao'] == "Prestador de Serviço"]
+        if prests:
+            st.write("---")
+            st.caption("🤝 Parceiros / Prestadores de Serviço")
+            for pr in prests: card(pr['nome'], pr['cargo'], pr['email'], "#f8f9fa", border_style="dashed")
 
     st.write("---")
     with st.expander("📄 Base de Conhecimento (Upload de PDFs)"):
@@ -268,7 +284,7 @@ with tab_perf:
                 supabase.table("documentos_conhecimento").insert({"titulo": pdf_file.name, "resumo_ia": texto[:3000], "tipo": "Normativo"}).execute()
                 st.success("Documento integrado!"); st.rerun()
 
-# --- ABA 4: CONFIGURAÇÕES (COMPLETA) ---
+# --- ABA 4: CONFIGURAÇÕES ---
 with tab_conf:
     st.subheader("⚙️ Painel de Controle FECD")
     c1, c2, c3 = st.columns(3)
