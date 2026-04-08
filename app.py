@@ -6,10 +6,14 @@ import requests
 import random
 from PyPDF2 import PdfReader
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
-st.set_page_config(page_title="Minhas Atividades - FECD", page_icon="📝", layout="wide")
+# --- 1. CONFIGURAÇÕES INICIAIS DA PÁGINA ---
+st.set_page_config(
+    page_title="Minhas Atividades - FECD",
+    page_icon="📝",
+    layout="wide"
+)
 
-# --- CONEXÃO COM SUPABASE ---
+# --- 2. CONEXÃO COM O BANCO DE DADOS (SUPABASE) ---
 @st.cache_resource
 def init_connection():
     try:
@@ -17,12 +21,12 @@ def init_connection():
         key = st.secrets["connections"]["supabase"]["key"]
         return create_client(url, key)
     except Exception as e:
-        st.error(f"Erro nas credenciais: {e}")
+        st.error(f"Erro de conexão: {e}")
         return None
 
 supabase: Client = init_connection()
 
-# --- FUNÇÕES DE CARREGAMENTO DE DADOS ---
+# --- 3. FUNÇÕES DE SUPORTE E CARREGAMENTO ---
 
 def carregar_categorias():
     try:
@@ -69,7 +73,7 @@ def buscar_pool_chaves():
         pool.extend([k['chave'].strip() for k in db_keys if "gsk_" in k['chave']])
     return list(set(pool))
 
-# --- MOTOR DE INTELIGÊNCIA ---
+# --- 4. MOTOR DE INTELIGÊNCIA ARTIFICIAL ---
 
 def extrair_texto_pdf(file):
     try:
@@ -80,6 +84,24 @@ def extrair_texto_pdf(file):
         return texto
     except: return "Erro ao extrair texto do PDF."
 
+def gerar_feedback_documento(texto_pdf):
+    """Gera um resumo da IA para confirmar a leitura do documento técnico."""
+    chaves = buscar_pool_chaves()
+    if not chaves: return "Documento salvo. IA indisponível para resumo imediato."
+    
+    prompt = "Resuma este documento técnico da Fundação em 3 pontos chave para a gestão contábil. Seja direto."
+    
+    random.shuffle(chaves)
+    for c in chaves:
+        try:
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions",
+                headers={"Authorization": f"Bearer {c}", "Content-Type": "application/json"},
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "user", "content": f"{prompt}\n\n{texto_pdf[:3000]}"}], "temperature": 0.1}, 
+                timeout=15)
+            if r.status_code == 200: return r.json()['choices'][0]['message']['content']
+        except: continue
+    return "Documento integrado com sucesso."
+
 def analisar_processo_ia(texto, categoria, origem, complexidade):
     chaves = buscar_pool_chaves()
     if not chaves: return "⚠️ Nenhuma chave Groq configurada."
@@ -88,18 +110,23 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
     equipe = carregar_equipe()
     docs = carregar_documentos()
     
-    # Contextualização avançada: Identifica quem enviou se o e-mail estiver na base
-    ctx_equipe = "\n".join([f"- {m['nome']} ({m['cargo']}) | E-mail: {m['email']} | Papel: {m['posicao']}" for m in equipe])
-    ctx_doc = "\n".join([f"- {d['titulo']}: {d['resumo_ia']}" for d in docs[:2]])
+    # Montagem do Contexto Profissional para a IA
+    ctx_equipe = "\n".join([f"- {m['nome']} ({m['cargo']}) | E-mail: {m['email']} | Posição: {m['posicao']}" for m in equipe])
+    ctx_doc = "\n".join([f"- {d['titulo']}: {d['resumo_ia'][:800]}" for d in docs[:3]])
     
     prompt = f"""
     Você é o Assistente Estratégico de {perfil.get('nome_profissional', 'Jhonata Leal Bastos')}, {perfil.get('cargo', 'Gerente Financeiro e Contador')}.
-    Contexto FECD: {perfil.get('certificacoes', 'Auditor QTG')}.
-    Mapeamento de Equipe (Use para identificar remetentes): {ctx_equipe}.
-    Base Técnica: {ctx_doc}.
+    Metas Estratégicas: {perfil.get('metas_estrategicas', 'Trabalho híbrido e automação')}.
     
-    Sua missão: Analisar a atividade, identificar se o remetente é um superior ou parceiro e sugerir a melhor abordagem técnica e produtiva (GTD).
-    Atividade: {texto}
+    ESTRUTURA FECD (Identifique remetentes aqui):
+    {ctx_equipe}
+    
+    CONHECIMENTO TÉCNICO (Normas e Estatutos):
+    {ctx_doc}
+    
+    Missão: Analise a demanda abaixo. Se houver nomes/e-mails, identifique a relação hierárquica. 
+    Sugira a conduta técnica baseada nas normas e no método GTD.
+    Demanda: {texto}
     """
     
     random.shuffle(chaves)
@@ -107,60 +134,56 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
         try:
             r = requests.post("https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {c}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto}], "temperature": 0.1}, timeout=15)
+                json={"model": "llama-3.1-8b-instant", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto}], "temperature": 0.1}, 
+                timeout=15)
             if r.status_code == 200: return r.json()['choices'][0]['message']['content']
         except: continue
-    return "❌ Falha na conexão com a IA."
+    return "❌ Erro na comunicação com a IA."
 
-# --- INTERFACE STREAMLIT ---
+# --- 5. INTERFACE DO USUÁRIO ---
 
-if not supabase:
-    st.error("Erro: Conexão com Supabase não estabelecida.")
-    st.stop()
+if not supabase: st.stop()
 
-tab_reg, tab_pan, tab_perf, tab_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama (CRUD)", "🏢 Perfil & Organograma", "⚙️ Configurações"])
+tab_reg, tab_pan, tab_perf, tab_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama (CRUD)", "🏢 Perfil & Contexto", "⚙️ Configurações"])
 
-# --- ABA 1: MAPEAMENTO ---
+# ABA 1: REGISTRO DE ATIVIDADES
 with tab_reg:
-    with st.form("form_registro", clear_on_submit=True):
-        col1, col2, col3 = st.columns(3)
-        data_f = col1.date_input("Data da Atividade:", value=datetime.date.today())
+    with st.form("form_novo_registro", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        data_f = c1.date_input("Data:", value=datetime.date.today())
+        cat_f = c2.selectbox("Domínio:", [c['nome'] for c in carregar_categorias()] or ["Geral"])
+        ori_f = c3.selectbox("Origem:", [o['nome'] for o in carregar_origens()] or ["E-mail"])
         
-        lista_cats = [c['nome'] for c in carregar_categorias()]
-        cat_f = col2.selectbox("Domínio/Categoria:", lista_cats if lista_cats else ["Financeiro"])
+        comp_f = st.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
+        desc_f = st.text_area("Descreva a atividade ou cole o e-mail:")
         
-        lista_origs = [o['nome'] for o in carregar_origens()]
-        orig_f = col3.selectbox("Origem da Demanda:", lista_origs if lista_origs else ["E-mail"])
-        
-        comp_f = st.select_slider("Nível de Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
-        desc_f = st.text_area("Descreva a atividade ou cole o e-mail recebido:")
-        
-        if st.form_submit_button("🚀 Sincronizar com Inteligência Cloud"):
+        if st.form_submit_button("🚀 Sincronizar com Inteligência"):
             if desc_f:
                 with st.spinner("IA processando seu contexto profissional..."):
-                    analise = analisar_processo_ia(desc_f, cat_f, orig_f, comp_f)
+                    analise = analisar_processo_ia(desc_f, cat_f, ori_f, comp_f)
                     supabase.table("registros").insert({
-                        "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "origem": orig_f,
-                        "complexidade": comp_f, "descricao": desc_f, "mapeamento_ia": analise
+                        "data": data_f.strftime("%Y-%m-%d"), 
+                        "dominio": cat_f, 
+                        "origem": ori_f,
+                        "complexidade": comp_f, 
+                        "descricao": desc_f, 
+                        "mapeamento_ia": analise
                     }).execute()
-                    st.success("Atividade mapeada e salva com sucesso!")
-                    st.rerun()
+                    st.success("Atividade sincronizada!"); st.rerun()
 
-# --- ABA 2: PANORAMA (CRUD COMPLETO) ---
+# ABA 2: GESTÃO (CRUD)
 with tab_pan:
-    st.subheader("📊 Gestão de Atividades Mapeadas")
-    res_atividades = supabase.table("registros").select("*").order("created_at", desc=True).execute()
+    st.subheader("📊 Panorama de Atividades")
+    res_atv = supabase.table("registros").select("*").order("created_at", desc=True).execute()
     
-    if res_atividades.data:
-        df = pd.DataFrame(res_atividades.data)
-        
-        c_refresh, c_del = st.columns([1, 6])
-        if c_refresh.button("🔄 Atualizar"): st.rerun()
-        
+    if res_atv.data:
+        df = pd.DataFrame(res_atv.data)
         st.write("---")
-        h = st.columns([0.4, 0.6, 1.0, 1.2, 1.2, 0.8, 3.0, 0.6, 0.6])
+        
+        # Cabeçalho customizado
+        cols = st.columns([0.4, 0.6, 1.0, 1.2, 1.2, 0.8, 3.0, 0.6, 0.6])
         titulos = ["Sel.", "ID", "Data", "Domínio", "Origem", "Comp.", "Descrição", "Edit", "Ver"]
-        for i, t in enumerate(titulos): h[i].write(f"**{t}**")
+        for i, t in enumerate(titulos): cols[i].write(f"**{t}**")
 
         selecionados = []
         for _, row in df.iterrows():
@@ -168,147 +191,84 @@ with tab_pan:
             if c[0].checkbox("", key=f"sel_{row['id']}"): selecionados.append(row['id'])
             c[1].write(row['id'])
             c[2].write(row['data'])
-            c[3].write(row.get('dominio', 'N/A'))
-            c[4].write(row.get('origem', 'N/A'))
+            c[3].write(row.get('dominio', ''))
+            c[4].write(row.get('origem', ''))
             c[5].write(row['complexidade'])
-            c[6].write(row['descricao'][:75] + "...")
+            c[6].write(row['descricao'][:65] + "...")
             
-            if c[7].button("📝", key=f"btn_ed_{row['id']}"): st.session_state[f"edit_mode_{row['id']}"] = True
-            if c[8].button("🔍", key=f"btn_vw_{row['id']}"): st.info(row['mapeamento_ia'])
+            if c[7].button("📝", key=f"ed_{row['id']}"): st.session_state[f"modo_ed_{row['id']}"] = True
+            if c[8].button("🔍", key=f"vw_{row['id']}"): st.info(row['mapeamento_ia'])
 
-            if st.session_state.get(f"edit_mode_{row['id']}", False):
-                with st.expander(f"Editar Atividade #{row['id']}", expanded=True):
-                    with st.form(f"form_ed_{row['id']}"):
-                        nova_desc = st.text_area("Descrição", value=row['descricao'])
-                        col_bt1, col_bt2 = st.columns(2)
-                        if col_bt1.form_submit_button("Confirmar Alteração"):
-                            supabase.table("registros").update({"descricao": nova_desc}).eq("id", row['id']).execute()
-                            st.session_state[f"edit_mode_{row['id']}"] = False
-                            st.rerun()
-                        if col_bt2.form_submit_button("Cancelar"):
-                            st.session_state[f"edit_mode_{row['id']}"] = False
-                            st.rerun()
+            # Janela de Edição
+            if st.session_state.get(f"modo_ed_{row['id']}", False):
+                with st.form(f"f_edit_{row['id']}"):
+                    n_desc = st.text_area("Editar Descrição:", value=row['descricao'])
+                    if st.form_submit_button("Confirmar Alteração"):
+                        supabase.table("registros").update({"descricao": n_desc}).eq("id", row['id']).execute()
+                        st.session_state[f"modo_ed_{row['id']}"] = False; st.rerun()
         
-        if selecionados:
-            if st.button(f"🔴 Excluir {len(selecionados)} itens selecionados"):
-                supabase.table("registros").delete().in_("id", selecionados).execute()
-                st.rerun()
-    else:
-        st.info("Nenhuma atividade registrada ainda.")
+        if selecionados and st.button("🔴 Excluir Itens Selecionados"):
+            supabase.table("registros").delete().in_("id", selecionados).execute(); st.rerun()
+    else: st.info("Nenhuma atividade registrada.")
 
-# --- ABA 3: PERFIL & ORGANOGRAMA ---
+# ABA 3: PERFIL E INTELIGÊNCIA INSTITUCIONAL
 with tab_perf:
-    st.subheader("🏢 Perfil Institucional & Estrutura de Equipe")
-    perfil = carregar_perfil_base()
-    equipe = carregar_equipe()
+    perfil = carregar_perfil_base(); equipe = carregar_equipe()
+    c_cad, c_vis = st.columns([1, 1.3])
     
-    col_cad, col_vis = st.columns([1, 1.3])
-    
-    with col_cad:
+    with c_cad:
         with st.expander("👤 Meu Perfil Profissional", expanded=True):
-            with st.form("form_meu_perfil"):
-                n_p = st.text_input("Nome Completo:", value=perfil.get('nome_profissional', ''))
-                c_p = st.text_input("Cargo Atual:", value=perfil.get('cargo', ''))
-                cert_p = st.text_area("Certificações Técnicas:", value=perfil.get('certificacoes', ''))
-                meta_p = st.text_area("Metas Estratégicas:", value=perfil.get('metas_estrategicas', ''))
-                if st.form_submit_button("Salvar Meu Perfil"):
-                    supabase.table("perfil_contexto").upsert({
-                        "id": 1, "nome_profissional": n_p, "cargo": c_p, 
-                        "certificacoes": cert_p, "metas_estrategicas": meta_p
-                    }).execute()
-                    st.success("Perfil atualizado!"); st.rerun()
+            with st.form("f_perfil"):
+                n_p = st.text_input("Nome:", value=perfil.get('nome_profissional', ''))
+                c_p = st.text_input("Cargo:", value=perfil.get('cargo', ''))
+                m_p = st.text_area("Metas Estratégicas:", value=perfil.get('metas_estrategicas', ''))
+                if st.form_submit_button("Salvar Perfil"):
+                    supabase.table("perfil_contexto").upsert({"id": 1, "nome_profissional": n_p, "cargo": c_p, "metas_estrategicas": m_p}).execute(); st.rerun()
+        
+        st.write("### 👥 Gestão de Equipe")
+        with st.form("f_add_eq", clear_on_submit=True):
+            en = st.text_input("Nome:"); ec = st.text_input("Cargo:"); ee = st.text_input("E-mail:")
+            ep = st.selectbox("Posição:", ["Superior", "Mesmo Nível (Par)", "Subordinado", "Prestador de Serviço"])
+            if st.form_submit_button("Adicionar à Equipe"):
+                supabase.table("equipe_organograma").insert({"nome": en, "cargo": ec, "email": ee, "posicao": ep}).execute(); st.rerun()
 
-        st.write("### 👥 Adicionar Membro à Equipe")
-        with st.form("form_add_equipe", clear_on_submit=True):
-            nm = st.text_input("Nome:"); cg = st.text_input("Cargo:"); em = st.text_input("E-mail:")
-            ps = st.selectbox("Posição Hierárquica:", ["Superior", "Mesmo Nível (Par)", "Subordinado", "Prestador de Serviço"])
-            if st.form_submit_button("Adicionar Membro"):
-                if nm and cg:
-                    supabase.table("equipe_organograma").insert({"nome": nm, "cargo": cg, "email": em, "posicao": ps}).execute()
-                    st.rerun()
-
-        if equipe:
-            with st.expander("🗑️ Gerenciar Equipe"):
-                for m in equipe:
-                    c1, c2 = st.columns([4, 1])
-                    c1.write(f"**{m['nome']}** - {m['posicao']}")
-                    if c2.button("Remover", key=f"del_mem_{m['id']}"):
-                        supabase.table("equipe_organograma").delete().eq("id", m['id']).execute()
-                        st.rerun()
-
-    with col_vis:
+    with c_vis:
         st.write("### 🌲 Organograma Dinâmico")
-        def card(n, c, e, color, border_style="solid"):
-            st.markdown(f'''
-                <div style="border:1px {border_style} #ddd; border-radius:10px; padding:15px; margin-bottom:10px; background:{color}; border-left:6px {border_style} #ff4b4b;">
-                    <b>{n.upper()}</b><br>
-                    <small>{c}</small><br>
-                    <code style="font-size:0.8em; color:#0068c9;">{e}</code>
-                </div>
-            ''', unsafe_allow_html=True)
-
-        sups = [m for m in equipe if m['posicao'] == "Superior"]
-        if sups:
-            st.caption("⬆️ Liderança / Superior")
-            for s in sups: card(s['nome'], s['cargo'], s['email'], "#eef7fa")
-            st.write("↓")
+        def card(n, c, e, color, stl="solid"):
+            st.markdown(f'<div style="border:1px {stl} #ddd; border-radius:10px; padding:12px; margin-bottom:8px; background:{color}; border-left:6px {stl} #ff4b4b;"><b>{n.upper()}</b><br><small>{c}</small><br><code>{e}</code></div>', unsafe_allow_html=True)
         
-        st.caption("📍 Posição Atual")
+        # Hierarquia visual
+        for m in [x for x in equipe if x['posicao'] == "Superior"]: card(m['nome'], m['cargo'], m['email'], "#eef7fa")
         card(perfil.get('nome_profissional', 'Você'), perfil.get('cargo', 'Seu Cargo'), "Seu E-mail", "#fff4f4")
-        
-        subs = [m for m in equipe if m['posicao'] == "Subordinado"]
-        pares = [m for m in equipe if m['posicao'] == "Mesmo Nível (Par)"]
-        
-        if pares:
-            st.caption("↔️ Colegas / Mesmo Nível")
-            for p in pares: card(p['nome'], p['cargo'], p['email'], "#ffffff")
-
-        if subs:
-            st.write("↓"); st.caption("⬇️ Subordinados / Apoio")
-            cols = st.columns(len(subs))
-            for i, s in enumerate(subs):
-                with cols[i]: card(s['nome'], s['cargo'], s['email'], "#f1fff1")
-
-        prests = [m for m in equipe if m['posicao'] == "Prestador de Serviço"]
-        if prests:
-            st.write("---")
-            st.caption("🤝 Parceiros / Prestadores de Serviço")
-            for pr in prests: card(pr['nome'], pr['cargo'], pr['email'], "#f8f9fa", border_style="dashed")
+        for m in [x for x in equipe if x['posicao'] == "Subordinado"]: card(m['nome'], m['cargo'], m['email'], "#f1fff1")
+        for m in [x for x in equipe if x['posicao'] == "Prestador de Serviço"]: card(m['nome'], m['cargo'], m['email'], "#f8f9fa", "dashed")
 
     st.write("---")
-    with st.expander("📄 Base de Conhecimento (Upload de PDFs)"):
-        pdf_file = st.file_uploader("Subir PDF Técnico:", type="pdf")
-        if pdf_file and st.button("Integrar PDF à Inteligência"):
-            with st.spinner("Extraindo dados..."):
-                texto = extrair_texto_pdf(pdf_file)
-                supabase.table("documentos_conhecimento").insert({"titulo": pdf_file.name, "resumo_ia": texto[:3000], "tipo": "Normativo"}).execute()
-                st.success("Documento integrado!"); st.rerun()
+    with st.expander("📄 Base de Conhecimento (Upload de PDFs)", expanded=True):
+        u_file = st.file_uploader("Subir PDF (Estatutos/Normas):", type="pdf")
+        if u_file and st.button("Integrar à Inteligência"):
+            with st.spinner("Lendo e interpretando documento..."):
+                texto_pdf = extrair_texto_pdf(u_file)
+                feedback = gerar_feedback_documento(texto_pdf)
+                supabase.table("documentos_conhecimento").insert({"titulo": u_file.name, "resumo_ia": texto_pdf[:4000]}).execute()
+                st.markdown("### ✅ IA: O que eu entendi deste documento:")
+                st.info(feedback)
 
-# --- ABA 4: CONFIGURAÇÕES ---
+# ABA 4: CONFIGURAÇÕES
 with tab_conf:
-    st.subheader("⚙️ Painel de Controle FECD")
+    st.subheader("⚙️ Painel de Controle")
     c1, c2, c3 = st.columns(3)
-    
     with c1:
-        st.write("### 📁 Categorias")
-        nova_cat = st.text_input("Nova Categoria:")
-        if st.button("Salvar Categoria") and nova_cat:
-            supabase.table("categorias").insert({"nome": nova_cat.strip()}).execute(); st.rerun()
-        for x in carregar_categorias():
-            st.caption(f"• {x['nome']}")
-
+        st.write("### Categorias")
+        n_c = st.text_input("Nova Categoria:")
+        if st.button("Add Cat") and n_c: supabase.table("categorias").insert({"nome": n_c}).execute(); st.rerun()
+        for x in carregar_categorias(): st.caption(f"• {x['nome']}")
     with c2:
-        st.write("### 📍 Origens")
-        nova_ori = st.text_input("Nova Origem:")
-        if st.button("Salvar Origem") and nova_ori:
-            supabase.table("origens").insert({"nome": nova_ori.strip()}).execute(); st.rerun()
-        for x in carregar_origens():
-            st.caption(f"• {x['nome']}")
-
+        st.write("### Origens")
+        n_o = st.text_input("Nova Origem:")
+        if st.button("Add Ori") and n_o: supabase.table("origens").insert({"nome": n_o}).execute(); st.rerun()
+        for x in carregar_origens(): st.caption(f"• {x['nome']}")
     with c3:
-        st.write("### 🔑 Chaves Groq")
-        nova_key = st.text_input("Nova API Key:", type="password")
-        if st.button("Salvar Chave") and nova_key.startswith("gsk_"):
-            supabase.table("config_chaves").insert({"chave": nova_key.strip()}).execute(); st.rerun()
-        for k in carregar_chaves_db():
-            st.text(f"Ativa: {k['chave'][:12]}...")
+        st.write("### Chaves API")
+        n_k = st.text_input("Nova Groq Key:", type="password")
+        if st.button("Salvar Chave") and n_k.startswith("gsk_"): supabase.table("config_chaves").insert({"chave": n_k}).execute(); st.rerun()
