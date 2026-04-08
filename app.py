@@ -6,6 +6,9 @@ import requests
 import random
 from PyPDF2 import PdfReader
 import re
+import pytesseract
+from pdf2image import convert_from_bytes
+from PIL import Image
 
 # --- 1. CONFIGURAÇÕES DE PÁGINA E ESTILO CSS ---
 st.set_page_config(
@@ -93,16 +96,38 @@ def sanear_texto_ocr(texto):
 
 def extrair_texto_pdf(file):
     try:
+        # 1. Tenta extração direta de texto (PDF Digital)
+        file.seek(0)
         reader = PdfReader(file)
         texto_completo = ""
         for page in reader.pages[:15]: # Processa até 15 páginas
             content = page.extract_text()
             if content: texto_completo += content + "\n"
-        return sanear_texto_ocr(texto_completo)
+
+        texto_saneado = sanear_texto_ocr(texto_completo)
+
+        # 2. Se o texto extraído for muito curto ou inexistente, tenta OCR (PDF Escaneado/Imagem)
+        if len(texto_saneado.strip()) < 150:
+            file.seek(0)
+            pdf_bytes = file.read()
+            # Converte PDF em imagens (uma por página)
+            images = convert_from_bytes(pdf_bytes, first_page=1, last_page=10)
+            texto_ocr = ""
+            for i, image in enumerate(images):
+                # Usa tesseract com idioma português
+                page_text = pytesseract.image_to_string(image, lang='por')
+                texto_ocr += f"\n--- Página {i+1} ---\n{page_text}"
+
+            texto_saneado = sanear_texto_ocr(texto_ocr)
+
+        return texto_saneado
     except Exception as e:
-        return f"Erro na extração: {e}"
+        return f"Erro técnico na extração: {str(e)}"
 
 def analisar_com_ia(texto, tipo="geral"):
+    if not texto or len(texto.strip()) < 20:
+        return "Erro: O documento parece estar sem texto legível (mesmo após tentativa de OCR)."
+
     # Busca chaves tanto no Secrets quanto no Banco de Dados
     pool_chaves = []
     if "GROQ_KEYS" in st.secrets:
@@ -115,15 +140,17 @@ def analisar_com_ia(texto, tipo="geral"):
     pool_chaves = list(set(pool_chaves)) # Remove duplicatas
     
     if not pool_chaves:
-        return "Erro: Nenhuma chave de API configurada no sistema."
+        return "Erro: Nenhuma chave de API configurada no sistema. Vá em Configurações."
 
     # Configuração de prompt conforme o contexto da FECD
     if tipo == "documento":
-        prompt = "Você é um Auditor Jurídico. Analise o estatuto e liste: 1. Objeto, 2. Quem assina, 3. Vigência."
+        prompt = "Você é um Auditor Jurídico. Analise o documento fornecido e extraia: 1. Objeto, 2. Partes/Quem assina, 3. Vigência/Prazos importantes."
     else:
-        prompt = "Você é o Assistente Estratégico do Jhonata. Analise a demanda e sugira os próximos passos técnicos."
+        prompt = "Você é o Assistente Estratégico do Jhonata. Analise a demanda técnica e sugira os próximos passos detalhados."
 
     random.shuffle(pool_chaves)
+    erros = []
+
     for chave in pool_chaves:
         try:
             r = requests.post(
@@ -131,16 +158,22 @@ def analisar_com_ia(texto, tipo="geral"):
                 headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
                 json={
                     "model": "llama-3.3-70b-specdec",
-                    "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto[:9000]}],
+                    "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto[:12000]}],
                     "temperature": 0.1
                 },
-                timeout=25
+                timeout=30
             )
             if r.status_code == 200:
                 return r.json()['choices'][0]['message']['content']
-        except: continue
+            elif r.status_code == 429:
+                erros.append(f"Limite de taxa (429) na chave {chave[:10]}...")
+            else:
+                erros.append(f"Erro {r.status_code} na chave {chave[:10]}...")
+        except Exception as e:
+            erros.append(f"Falha de conexão: {str(e)}")
+            continue
     
-    return "A análise da IA falhou, mas o texto bruto foi salvo."
+    return f"A análise falhou após tentar {len(pool_chaves)} chaves. Detalhes: " + "; ".join(erros[:2])
 
 # --- 5. INTERFACE PRINCIPAL ---
 
