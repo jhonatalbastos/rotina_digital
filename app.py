@@ -7,10 +7,10 @@ import random
 from PyPDF2 import PdfReader
 import re
 
-# --- CONFIGURAÇÃO DA PÁGINA ---
+# --- 1. CONFIGURAÇÃO DA PÁGINA ---
 st.set_page_config(page_title="Minhas Atividades - FECD", page_icon="📝", layout="wide")
 
-# --- CONEXÃO SUPABASE ---
+# --- 2. CONEXÃO SUPABASE ---
 @st.cache_resource
 def init_connection():
     try:
@@ -21,7 +21,7 @@ def init_connection():
 
 supabase: Client = init_connection()
 
-# --- FUNÇÕES DE CARREGAMENTO ---
+# --- 3. FUNÇÕES DE SUPORTE ---
 def carregar_categorias():
     res = supabase.table("categorias").select("*").order("nome").execute()
     return res.data if res.data else []
@@ -50,10 +50,10 @@ def buscar_pool_chaves():
     if res.data: pool.extend([k['chave'].strip() for k in res.data])
     return list(set(pool))
 
-# --- MOTOR DE INTELIGÊNCIA E OCR ---
+# --- 4. MOTOR DE INTELIGÊNCIA E OCR ---
 
 def limpar_texto_ocr(texto):
-    # Remove excesso de espaços e caracteres especiais comuns em scans ruins
+    """Limpa o lixo de caracteres de PDFs escaneados."""
     texto = re.sub(r'\s+', ' ', texto)
     texto = re.sub(r'[^\w\s\d.,;:\-\(\)@]', '', texto)
     return texto.strip()
@@ -63,21 +63,22 @@ def extrair_texto_pdf(file):
         reader = PdfReader(file)
         texto = ""
         for page in reader.pages:
-            texto += page.extract_text() + "\n"
+            content = page.extract_text()
+            if content: texto += content + "\n"
         return limpar_texto_ocr(texto)
     except: return "Erro no processamento do arquivo."
 
 def analisar_documento_estrategico(texto_pdf):
-    """Transforma o texto bruto em conhecimento catalogado."""
+    """IA transforma a massa de texto em tópicos de gestão FECD."""
     chaves = buscar_pool_chaves()
-    if not chaves: return "Documento processado sem análise de IA."
+    if not chaves: return "Documento processado. IA offline para análise."
     
     prompt = """
-    Analise este documento da Fundação FECD e extraia:
-    1. OBJETIVO PRINCIPAL: (O que é este documento?)
-    2. REGRAS CRÍTICAS: (Prazos, limites de valores ou obrigações citadas)
-    3. IMPACTO CONTÁBIL/FINANCEIRO: (Como isso afeta o dia a dia do Jhonata?)
-    Responda em tópicos curtos e profissionais. Não repita o texto bruto.
+    Você é um Auditor e Gestor da Fundação FECD. Analise este texto (OCR) e resuma:
+    1. OBJETO: O que é este documento.
+    2. REGRAS: Prazos, valores ou obrigações citadas.
+    3. CONDUTA: Como o Jhonata deve agir baseado nisso.
+    Seja compacto e ignore erros de leitura do OCR.
     """
     
     random.shuffle(chaves)
@@ -85,11 +86,11 @@ def analisar_documento_estrategico(texto_pdf):
         try:
             r = requests.post("https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {c}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-70b-versatile", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto_pdf[:6000]}], "temperature": 0.2}, 
+                json={"model": "llama-3.1-70b-versatile", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto_pdf[:7000]}], "temperature": 0.1}, 
                 timeout=20)
             if r.status_code == 200: return r.json()['choices'][0]['message']['content']
         except: continue
-    return "Falha na análise técnica da IA."
+    return "Documento salvo, mas análise de IA falhou."
 
 def analisar_processo_ia(texto, categoria, origem, complexidade):
     chaves = buscar_pool_chaves()
@@ -98,27 +99,21 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
     docs = carregar_documentos()
     
     ctx_equipe = "\n".join([f"- {m['nome']} ({m['cargo']}) | E-mail: {m['email']}" for m in equipe])
-    ctx_doc = "\n".join([f"DOC: {d['titulo']}\nANÁLISE: {d['resumo_ia']}" for d in docs[:3]])
+    ctx_doc = "\n".join([f"DOC: {d['titulo']}\nIA: {d['resumo_ia']}" for d in docs[:2]])
     
-    prompt = f"""
-    Assistente Estratégico do Jhonata ({perfil.get('cargo', 'Contador')}).
-    EQUIPE: {ctx_equipe}
-    CONHECIMENTO TÉCNICO ACUMULADO: {ctx_doc}
-    Analise a demanda e sugira a melhor conduta técnica.
-    Demanda: {texto}
-    """
+    prompt = f"Assistente de {perfil.get('nome_profissional', 'Jhonata')}. CONTEXTO FECD:\n{ctx_equipe}\nBASE TÉCNICA:\n{ctx_doc}\nAnalise: {texto}"
+    
     random.shuffle(chaves)
     for c in chaves:
         try:
             r = requests.post("https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {c}", "Content-Type": "application/json"},
-                json={"model": "llama-3.1-70b-versatile", "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto}], "temperature": 0.1}, 
-                timeout=15)
+                json={"model": "llama-3.1-70b-versatile", "messages": [{"role": "user", "content": prompt}], "temperature": 0.1}, timeout=15)
             if r.status_code == 200: return r.json()['choices'][0]['message']['content']
         except: continue
     return "IA Offline."
 
-# --- INTERFACE ---
+# --- 5. INTERFACE ---
 tab_reg, tab_pan, tab_perf, tab_conf = st.tabs(["📝 Mapear Processo", "📊 Panorama (CRUD)", "🏢 Perfil & Contexto", "⚙️ Configurações"])
 
 # ABA 1: MAPEAMENTO
@@ -129,16 +124,17 @@ with tab_reg:
         ct = c2.selectbox("Domínio:", [x['nome'] for x in carregar_categorias()] or ["Geral"])
         og = c3.selectbox("Origem:", [x['nome'] for x in carregar_origens()] or ["E-mail"])
         cp = st.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
-        ds = st.text_area("Descrição/E-mail:")
+        ds = st.text_area("Descrição da Demanda:")
         if st.form_submit_button("🚀 Sincronizar"):
             if ds:
-                with st.spinner("IA processando..."):
+                with st.spinner("IA analisando..."):
                     ana = analisar_processo_ia(ds, ct, og, cp)
                     supabase.table("registros").insert({"data": dt.strftime("%Y-%m-%d"), "dominio": ct, "origem": og, "complexidade": cp, "descricao": ds, "mapeamento_ia": ana}).execute()
                     st.success("Sincronizado!"); st.rerun()
 
-# ABA 2: PANORAMA
+# ABA 2: PANORAMA (CRUD)
 with tab_pan:
+    st.subheader("📊 Gestão de Atividades")
     res = supabase.table("registros").select("*").order("created_at", desc=True).execute()
     if res.data:
         df = pd.DataFrame(res.data)
@@ -158,10 +154,10 @@ with tab_pan:
                     if st.form_submit_button("Salvar"):
                         supabase.table("registros").update({"descricao": nd}).eq("id", row['id']).execute()
                         st.session_state[f"ed_{row['id']}"] = False; st.rerun()
-        if selecionados and st.button("🔴 Excluir"):
+        if selecionados and st.button("🔴 Excluir Itens"):
             supabase.table("registros").delete().in_("id", selecionados).execute(); st.rerun()
 
-# ABA 3: PERFIL E CONHECIMENTO (CATÁLOGO ORGANIZADO)
+# ABA 3: PERFIL E CONHECIMENTO
 with tab_perf:
     sub_p, sub_c = st.tabs(["🏢 Perfil & Equipe", "📄 Catálogo de Inteligência"])
     
@@ -169,18 +165,18 @@ with tab_perf:
         perfil = carregar_perfil_base(); equipe = carregar_equipe()
         cl, cr = st.columns([1, 1.3])
         with cl:
-            with st.expander("👤 Meu Perfil", expanded=True):
+            with st.expander("👤 Perfil Profissional", expanded=True):
                 with st.form("f_p"):
-                    np = st.text_input("Nome:", value=perfil.get('nome_profissional', ''))
+                    np = st.text_input("Nome:", value=perfil.get('nome_professional', ''))
                     cg = st.text_input("Cargo:", value=perfil.get('cargo', ''))
                     mt = st.text_area("Metas:", value=perfil.get('metas_estrategicas', ''))
-                    if st.form_submit_button("Salvar"):
+                    if st.form_submit_button("Salvar Perfil"):
                         supabase.table("perfil_contexto").upsert({"id": 1, "nome_profissional": np, "cargo": cg, "metas_estrategicas": mt}).execute(); st.rerun()
-            st.write("### 👥 Equipe")
+            st.write("### 👥 Gestão de Equipe")
             with st.form("f_eq", clear_on_submit=True):
                 en = st.text_input("Nome:"); ec = st.text_input("Cargo:"); ee = st.text_input("E-mail:")
                 ep = st.selectbox("Posição:", ["Superior", "Mesmo Nível (Par)", "Subordinado", "Prestador de Serviço"])
-                if st.form_submit_button("Add"):
+                if st.form_submit_button("Adicionar"):
                     supabase.table("equipe_organograma").insert({"nome": en, "cargo": ec, "email": ee, "posicao": ep}).execute(); st.rerun()
         with cr:
             st.write("### 🌲 Organograma")
@@ -193,30 +189,35 @@ with tab_perf:
 
     with sub_c:
         st.subheader("📚 Base de Conhecimento Técnica")
-        
-        # Upload com OCR e Análise IA
-        with st.expander("➕ Integrar Novo Documento (OCR + Análise IA)"):
+        with st.expander("➕ Integrar Novo Documento (Com OCR Inteligente)"):
             up = st.file_uploader("Subir PDF:", type="pdf")
-            if up and st.button("Processar Inteligência"):
-                with st.spinner("OCR e IA analisando documento..."):
-                    bruto = extrair_texto_pdf(up)
-                    analise_ia = analisar_documento_estrategico(bruto)
-                    supabase.table("documentos_conhecimento").insert({"titulo": up.name, "resumo_ia": analise_ia, "conteudo_completo": bruto[:8000]}).execute()
-                    st.success("Conhecimento catalogado com sucesso!"); st.rerun()
+            if up and st.button("Processar e Analisar com IA"):
+                with st.spinner("Extraindo e Analisando conteúdo..."):
+                    texto_bruto = extrair_texto_pdf(up)
+                    analise_ia = analisar_documento_estrategico(texto_bruto)
+                    try:
+                        # CORREÇÃO DO ERRO DE API: Garante que as colunas existam no banco
+                        supabase.table("documentos_conhecimento").insert({
+                            "titulo": up.name, 
+                            "resumo_ia": analise_ia, 
+                            "conteudo_completo": texto_bruto[:10000] # Limite para evitar erro de payload
+                        }).execute()
+                        st.success("Documento absorvido pela IA!"); st.rerun()
+                    except Exception as e:
+                        st.error(f"Erro ao salvar no banco: Certifique-se de que as colunas 'resumo_ia' e 'conteudo_completo' existem na tabela. Detalhe: {e}")
 
-        # Database de Conhecimento Compacta
+        # DATABASE COMPACTA
         docs = carregar_documentos()
         if docs:
             st.write("---")
             for d in docs:
                 with st.container():
-                    col_txt, col_del = st.columns([5, 1])
-                    with col_txt:
+                    col_info, col_del = st.columns([5, 1])
+                    with col_info:
                         st.markdown(f"**📄 {d['titulo']}**")
-                        # Interface compacta para o entendimento da IA
-                        st.caption("Entendimento Técnico da IA:")
-                        st.info(d['resumo_ia'])
-                    if col_del.button("🗑️", key=f"del_{d['id']}"):
+                        with st.expander("🔍 Ver Entendimento da IA"):
+                            st.info(d.get('resumo_ia', 'Sem análise disponível.'))
+                    if col_del.button("🗑️", key=f"del_doc_{d['id']}"):
                         supabase.table("documentos_conhecimento").delete().eq("id", d['id']).execute(); st.rerun()
                     st.divider()
 
@@ -231,4 +232,4 @@ with tab_conf:
         if st.button("Add Ori") and no: supabase.table("origens").insert({"nome": no}).execute(); st.rerun()
     with c3:
         nk = st.text_input("Groq Key:", type="password")
-        if st.button("Add Key") and nk: supabase.table("config_chaves").insert({"chave": nk}).execute(); st.rerun()
+        if st.button("Salvar Chave") and nk: supabase.table("config_chaves").insert({"chave": nk}).execute(); st.rerun()
