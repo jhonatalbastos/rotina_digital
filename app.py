@@ -53,6 +53,19 @@ def buscar_pool_chaves_total():
 def analisar_processo_ia(texto, categoria, origem, complexidade):
     chaves = buscar_pool_chaves_total()
     if not chaves: return "⚠️ Sem chaves no sistema.", texto
+    
+    # NOVO PROMPT FOCO EM CATALOGAÇÃO E MAPEAMENTO
+    system_prompt = (
+        "Você é um Analista de Processos Sênior especializado em Gestão Pública e Terceiro Setor. "
+        "Sua tarefa NÃO é responder mensagens, mas sim ANALISAR E CATALOGAR a atividade descrita. "
+        "Estruture sua resposta em: "
+        "1. RESUMO EXECUTIVO: O que foi feito/solicitado. "
+        "2. TAREFAS IDENTIFICADAS: Liste as subtarefas técnicas (contábeis, financeiras ou legais). "
+        "3. IMPACTO NO PROCESSO: Como isso afeta o fluxo da fundação. "
+        "4. SUGESTÃO DE PADRONIZAÇÃO: Se houver, sugira como automatizar ou otimizar essa demanda específica. "
+        "Mantenha um tom técnico, profissional e focado em mapeamento de carga de trabalho."
+    )
+    
     random.shuffle(chaves)
     for chave in chaves:
         try:
@@ -62,10 +75,10 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
                 json={
                     "model": "llama-3.1-8b-instant",
                     "messages": [
-                        {"role": "system", "content": "Você é um Engenheiro de Processos especialista."},
-                        {"role": "user", "content": f"Categoria: {categoria} | Origem: {origem} | Processo: {texto}"}
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": f"ENTRADA PARA ANÁLISE:\nCategoria: {categoria}\nOrigem: {origem}\nTexto: {texto}"}
                     ],
-                    "temperature": 0.3
+                    "temperature": 0.1 # Menor criatividade para ser mais preciso
                 }, timeout=20
             )
             if response.status_code == 200:
@@ -86,7 +99,6 @@ with aba_reg:
         c1, c2, c3 = st.columns(3)
         data_f = c1.date_input("Data:", value=datetime.date.today())
         
-        # Nome alterado para Categoria
         cats = carregar_categorias()
         nomes_cat = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditoria"]
         cat_f = c2.selectbox("Categoria:", nomes_cat)
@@ -96,18 +108,17 @@ with aba_reg:
         origem_f = c3.selectbox("Origem:", nomes_orig)
         
         comp_f = st.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
-        desc_f = st.text_area("Descrição detalhada da Atividade:")
+        desc_f = st.text_area("Descrição detalhada da Atividade (Copie e cole e-mails ou logs aqui):")
         
         if st.form_submit_button("Sincronizar com Nuvem"):
             if desc_f:
-                with st.spinner("IA Analisando..."):
+                with st.spinner("Mapeando Atividade via IA..."):
                     analise, texto_final = analisar_processo_ia(desc_f, cat_f, origem_f, comp_f)
-                    # No banco a coluna ainda se chama 'dominio', mas na interface é 'Categoria'
                     supabase.table("registros").insert({
                         "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "origem": origem_f,
                         "complexidade": comp_f, "descricao": texto_final, "mapeamento_ia": analise
                     }).execute()
-                    st.success("✅ Atividade registrada com sucesso!")
+                    st.success("✅ Atividade catalogada com sucesso!")
                     st.rerun()
 
 # --- ABA 2: PANORAMA (CRUD) ---
@@ -120,7 +131,6 @@ with aba_dash:
         if st.button("🔄 Atualizar Dados"): st.rerun()
         
         st.write("---")
-        # Layout de colunas com Categoria no lugar de Domínio
         h = st.columns([0.5, 0.8, 1.2, 1.5, 1.5, 1, 3, 0.8, 0.8])
         h[0].write("**Sel.**")
         h[1].write("**ID**")
@@ -133,8 +143,6 @@ with aba_dash:
         h[8].write("**Ver**")
 
         selecao_atual = []
-
-        # Listas para os selects de edição
         list_cats = [c['nome'] for c in carregar_categorias()]
         list_origs = [o['nome'] for o in carregar_origens()]
 
@@ -144,7 +152,6 @@ with aba_dash:
             c[1].write(row['id'])
             c[2].write(row['data'])
             
-            # Coluna Categoria (antigo domínio)
             cat_val = row.get('dominio', 'N/A')
             c[3].write(cat_val)
             
@@ -157,27 +164,19 @@ with aba_dash:
             if c[7].button("📝", key=f"edit_{row['id']}"): st.session_state[f"editing_{row['id']}"] = True
             ver_analise = c[8].button("🔍", key=f"view_{row['id']}")
 
-            # FORMULÁRIO DE EDIÇÃO ATUALIZADO
             if st.session_state.get(f"editing_{row['id']}", False):
                 with st.expander(f"✏️ Editar Atividade #{row['id']}", expanded=True):
                     with st.form(f"f_edit_{row['id']}"):
                         col_ed_top1, col_ed_top2 = st.columns(2)
-                        
-                        # Edição de Categoria adicionada
                         idx_cat = list_cats.index(cat_val) if cat_val in list_cats else 0
                         ed_cat = col_ed_top1.selectbox("Nova Categoria", list_cats, index=idx_cat)
-                        
-                        # Edição de Origem
                         idx_orig = list_origs.index(orig_val) if orig_val in list_origs else 0
                         ed_orig = col_ed_top2.selectbox("Nova Origem", list_origs, index=idx_orig)
-                        
                         ed_desc = st.text_area("Descrição", value=row['descricao'])
                         
                         if st.form_submit_button("Atualizar Registro"):
                             supabase.table("registros").update({
-                                "dominio": ed_cat, 
-                                "origem": ed_orig, 
-                                "descricao": ed_desc
+                                "dominio": ed_cat, "origem": ed_orig, "descricao": ed_desc
                             }).eq("id", row['id']).execute()
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
@@ -187,7 +186,7 @@ with aba_dash:
 
             if ver_analise:
                 with st.chat_message("assistant"):
-                    st.markdown(f"**Análise da Atividade #{row['id']}:**")
+                    st.markdown(f"**🔍 Análise Técnica da Atividade #{row['id']}:**")
                     st.write(row['mapeamento_ia'])
                     if st.button("Fechar", key=f"close_{row['id']}"): st.rerun()
 
@@ -215,7 +214,6 @@ with aba_conf:
 
     with c2:
         st.write("### 📍 Origens")
-        # Mantido conforme configurado anteriormente
         n_o = st.text_input("Nova Origem:")
         if st.button("Add Origem"):
             if n_o: supabase.table("origens").insert({"nome": n_o.strip()}).execute(); st.rerun()
