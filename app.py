@@ -157,7 +157,7 @@ def analisar_com_ia(texto, tipo="geral"):
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={"Authorization": f"Bearer {chave}", "Content-Type": "application/json"},
                 json={
-                    "model": "llama-3.3-70b-specdec",
+                    "model": "llama-3.3-70b-versatile",
                     "messages": [{"role": "system", "content": prompt}, {"role": "user", "content": texto[:12000]}],
                     "temperature": 0.1
                 },
@@ -168,7 +168,8 @@ def analisar_com_ia(texto, tipo="geral"):
             elif r.status_code == 429:
                 erros.append(f"Limite de taxa (429) na chave {chave[:10]}...")
             else:
-                erros.append(f"Erro {r.status_code} na chave {chave[:10]}...")
+                msg_erro = r.json().get('error', {}).get('message', '') if r.status_code == 400 else ""
+                erros.append(f"Erro {r.status_code} ({msg_erro}) na chave {chave[:10]}...")
         except Exception as e:
             erros.append(f"Falha de conexão: {str(e)}")
             continue
