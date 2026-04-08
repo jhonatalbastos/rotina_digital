@@ -6,7 +6,6 @@ import requests
 import random
 
 # --- CONFIGURAÇÃO DA PÁGINA ---
-# 1. Mudança de nome conforme solicitado
 st.set_page_config(page_title="Minhas Atividades - FECD", page_icon="📝", layout="wide")
 
 # --- CONEXÃO MANUAL COM SUPABASE ---
@@ -87,15 +86,13 @@ with aba_reg:
         c1, c2, c3 = st.columns(3)
         data_f = c1.date_input("Data:", value=datetime.date.today())
         
-        # Domínios
         cats = carregar_categorias()
         nomes_cat = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditoria"]
         cat_f = c2.selectbox("Domínio:", nomes_cat)
         
-        # 2. Origem com opções fixas e edição rápida
         origs = carregar_origens()
-        nomes_orig = [o['nome'] for o in origs] if origs else ["E-mail", "WhatsApp", "Reunião", "Demanda Interna"]
-        origem_f = c3.selectbox("Origem (Classificação):", nomes_orig)
+        nomes_orig = [o['nome'] for o in origs] if origs else ["E-mail", "WhatsApp", "Reunião"]
+        origem_f = c3.selectbox("Origem:", nomes_orig)
         
         comp_f = st.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
         desc_f = st.text_area("Descrição detalhada da Atividade:")
@@ -108,7 +105,7 @@ with aba_reg:
                         "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "origem": origem_f,
                         "complexidade": comp_f, "descricao": texto_final, "mapeamento_ia": analise
                     }).execute()
-                    st.success("✅ Atividade registrada com sucesso!")
+                    st.success("✅ Atividade registrada!")
                     st.rerun()
 
 # --- ABA 2: PANORAMA (CRUD) ---
@@ -121,6 +118,7 @@ with aba_dash:
         if st.button("🔄 Atualizar Dados"): st.rerun()
         
         st.write("---")
+        # Layout de colunas ajustado para visibilidade total
         h = st.columns([0.5, 0.8, 1.2, 1.5, 1.5, 1, 3, 0.8, 0.8])
         h[0].write("**Sel.**")
         h[1].write("**ID**")
@@ -134,29 +132,48 @@ with aba_dash:
 
         selecao_atual = []
 
+        # Carregar origens para o selectbox de edição
+        origs_edit = carregar_origens()
+        nomes_orig_edit = [o['nome'] for o in origs_edit] if origs_edit else ["E-mail", "WhatsApp"]
+
         for _, row in df.iterrows():
             c = st.columns([0.5, 0.8, 1.2, 1.5, 1.5, 1, 3, 0.8, 0.8])
             if c[0].checkbox("", key=f"sel_{row['id']}"): selecao_atual.append(row['id'])
             c[1].write(row['id'])
             c[2].write(row['data'])
             c[3].write(row['dominio'])
-            c[4].write(row.get('origem', 'N/A'))
+            
+            # Exibição da Origem (Trata o None que aparece no seu print)
+            orig_val = row.get('origem')
+            c[4].write(orig_val if orig_val else "⚠️ S/ Origem")
+            
             c[5].write(row['complexidade'])
             c[6].write(row['descricao'][:70] + "...")
             
             if c[7].button("📝", key=f"edit_{row['id']}"): st.session_state[f"editing_{row['id']}"] = True
             ver_analise = c[8].button("🔍", key=f"view_{row['id']}")
 
+            # Módulo de Edição (Conforme seu print image_05e4e6.png)
             if st.session_state.get(f"editing_{row['id']}", False):
                 with st.expander(f"✏️ Editar Atividade #{row['id']}", expanded=True):
                     with st.form(f"f_edit_{row['id']}"):
-                        ed_orig = st.selectbox("Origem", nomes_orig, index=nomes_orig.index(row['origem']) if row['origem'] in nomes_orig else 0)
+                        # Seleciona a origem atual ou a primeira da lista
+                        idx_orig = 0
+                        if orig_val in nomes_orig_edit:
+                            idx_orig = nomes_orig_edit.index(orig_val)
+                        
+                        ed_orig = st.selectbox("Nova Origem", nomes_orig_edit, index=idx_orig)
                         ed_desc = st.text_area("Descrição", value=row['descricao'])
-                        if st.form_submit_button("Atualizar"):
-                            supabase.table("registros").update({"origem": ed_orig, "descricao": ed_desc}).eq("id", row['id']).execute()
+                        
+                        col_ed1, col_ed2 = st.columns(2)
+                        if col_ed1.form_submit_button("Atualizar"):
+                            supabase.table("registros").update({
+                                "origem": ed_orig, 
+                                "descricao": ed_desc
+                            }).eq("id", row['id']).execute()
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
-                        if st.form_submit_button("Cancelar"):
+                        if col_ed2.form_submit_button("Cancelar"):
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
 
@@ -180,7 +197,7 @@ with aba_conf:
     
     with c1:
         st.write("### 📁 Domínios")
-        n_c = st.text_input("Nova Categoria:")
+        n_c = st.text_input("Novo Domínio:")
         if st.button("Add Domínio"):
             if n_c: supabase.table("categorias").insert({"nome": n_c.strip()}).execute(); st.rerun()
         for cat in carregar_categorias():
@@ -192,9 +209,7 @@ with aba_conf:
         st.write("### 📍 Origens")
         n_o = st.text_input("Nova Origem:")
         if st.button("Add Origem"):
-            if n_o: 
-                try: supabase.table("origens").insert({"nome": n_o.strip()}).execute(); st.rerun()
-                except: st.error("Crie a tabela 'origens' no Supabase primeiro.")
+            if n_o: supabase.table("origens").insert({"nome": n_o.strip()}).execute(); st.rerun()
         for ori in carregar_origens():
             col1, col2 = st.columns([4, 1])
             col1.text(ori['nome'])
@@ -203,7 +218,7 @@ with aba_conf:
     with c3:
         st.write("### 🔑 Chaves Groq")
         n_k = st.text_input("Nova Chave:", type="password")
-        if st.button("Add Key"):
+        if st.button("Salvar Chave"):
             if n_k.startswith("gsk_"): supabase.table("config_chaves").insert({"chave": n_k.strip()}).execute(); st.rerun()
         for k in carregar_chaves_db():
             col1, col2 = st.columns([4, 1])
