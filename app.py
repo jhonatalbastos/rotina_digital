@@ -63,7 +63,7 @@ def analisar_processo_ia(texto, categoria, origem, complexidade):
                     "model": "llama-3.1-8b-instant",
                     "messages": [
                         {"role": "system", "content": "Você é um Engenheiro de Processos especialista."},
-                        {"role": "user", "content": f"Domínio: {categoria} | Origem: {origem} | Processo: {texto}"}
+                        {"role": "user", "content": f"Categoria: {categoria} | Origem: {origem} | Processo: {texto}"}
                     ],
                     "temperature": 0.3
                 }, timeout=20
@@ -86,9 +86,10 @@ with aba_reg:
         c1, c2, c3 = st.columns(3)
         data_f = c1.date_input("Data:", value=datetime.date.today())
         
+        # Nome alterado para Categoria
         cats = carregar_categorias()
         nomes_cat = [c['nome'] for c in cats] if cats else ["Financeiro", "Auditoria"]
-        cat_f = c2.selectbox("Domínio:", nomes_cat)
+        cat_f = c2.selectbox("Categoria:", nomes_cat)
         
         origs = carregar_origens()
         nomes_orig = [o['nome'] for o in origs] if origs else ["E-mail", "WhatsApp", "Reunião"]
@@ -101,11 +102,12 @@ with aba_reg:
             if desc_f:
                 with st.spinner("IA Analisando..."):
                     analise, texto_final = analisar_processo_ia(desc_f, cat_f, origem_f, comp_f)
+                    # No banco a coluna ainda se chama 'dominio', mas na interface é 'Categoria'
                     supabase.table("registros").insert({
                         "data": data_f.strftime("%Y-%m-%d"), "dominio": cat_f, "origem": origem_f,
                         "complexidade": comp_f, "descricao": texto_final, "mapeamento_ia": analise
                     }).execute()
-                    st.success("✅ Atividade registrada!")
+                    st.success("✅ Atividade registrada com sucesso!")
                     st.rerun()
 
 # --- ABA 2: PANORAMA (CRUD) ---
@@ -118,12 +120,12 @@ with aba_dash:
         if st.button("🔄 Atualizar Dados"): st.rerun()
         
         st.write("---")
-        # Layout de colunas ajustado para visibilidade total
+        # Layout de colunas com Categoria no lugar de Domínio
         h = st.columns([0.5, 0.8, 1.2, 1.5, 1.5, 1, 3, 0.8, 0.8])
         h[0].write("**Sel.**")
         h[1].write("**ID**")
         h[2].write("**Data**")
-        h[3].write("**Domínio**")
+        h[3].write("**Categoria**")
         h[4].write("**Origem**")
         h[5].write("**Comp.**")
         h[6].write("**Descrição**")
@@ -132,19 +134,21 @@ with aba_dash:
 
         selecao_atual = []
 
-        # Carregar origens para o selectbox de edição
-        origs_edit = carregar_origens()
-        nomes_orig_edit = [o['nome'] for o in origs_edit] if origs_edit else ["E-mail", "WhatsApp"]
+        # Listas para os selects de edição
+        list_cats = [c['nome'] for c in carregar_categorias()]
+        list_origs = [o['nome'] for o in carregar_origens()]
 
         for _, row in df.iterrows():
             c = st.columns([0.5, 0.8, 1.2, 1.5, 1.5, 1, 3, 0.8, 0.8])
             if c[0].checkbox("", key=f"sel_{row['id']}"): selecao_atual.append(row['id'])
             c[1].write(row['id'])
             c[2].write(row['data'])
-            c[3].write(row['dominio'])
             
-            # Exibição da Origem (Trata o None que aparece no seu print)
-            orig_val = row.get('origem')
+            # Coluna Categoria (antigo domínio)
+            cat_val = row.get('dominio', 'N/A')
+            c[3].write(cat_val)
+            
+            orig_val = row.get('origem', 'N/A')
             c[4].write(orig_val if orig_val else "⚠️ S/ Origem")
             
             c[5].write(row['complexidade'])
@@ -153,27 +157,31 @@ with aba_dash:
             if c[7].button("📝", key=f"edit_{row['id']}"): st.session_state[f"editing_{row['id']}"] = True
             ver_analise = c[8].button("🔍", key=f"view_{row['id']}")
 
-            # Módulo de Edição (Conforme seu print image_05e4e6.png)
+            # FORMULÁRIO DE EDIÇÃO ATUALIZADO
             if st.session_state.get(f"editing_{row['id']}", False):
                 with st.expander(f"✏️ Editar Atividade #{row['id']}", expanded=True):
                     with st.form(f"f_edit_{row['id']}"):
-                        # Seleciona a origem atual ou a primeira da lista
-                        idx_orig = 0
-                        if orig_val in nomes_orig_edit:
-                            idx_orig = nomes_orig_edit.index(orig_val)
+                        col_ed_top1, col_ed_top2 = st.columns(2)
                         
-                        ed_orig = st.selectbox("Nova Origem", nomes_orig_edit, index=idx_orig)
+                        # Edição de Categoria adicionada
+                        idx_cat = list_cats.index(cat_val) if cat_val in list_cats else 0
+                        ed_cat = col_ed_top1.selectbox("Nova Categoria", list_cats, index=idx_cat)
+                        
+                        # Edição de Origem
+                        idx_orig = list_origs.index(orig_val) if orig_val in list_origs else 0
+                        ed_orig = col_ed_top2.selectbox("Nova Origem", list_origs, index=idx_orig)
+                        
                         ed_desc = st.text_area("Descrição", value=row['descricao'])
                         
-                        col_ed1, col_ed2 = st.columns(2)
-                        if col_ed1.form_submit_button("Atualizar"):
+                        if st.form_submit_button("Atualizar Registro"):
                             supabase.table("registros").update({
+                                "dominio": ed_cat, 
                                 "origem": ed_orig, 
                                 "descricao": ed_desc
                             }).eq("id", row['id']).execute()
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
-                        if col_ed2.form_submit_button("Cancelar"):
+                        if st.form_submit_button("Cancelar"):
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
 
@@ -196,9 +204,9 @@ with aba_conf:
     c1, c2, c3 = st.columns(3)
     
     with c1:
-        st.write("### 📁 Domínios")
-        n_c = st.text_input("Novo Domínio:")
-        if st.button("Add Domínio"):
+        st.write("### 📁 Categorias")
+        n_c = st.text_input("Nova Categoria:")
+        if st.button("Add Categoria"):
             if n_c: supabase.table("categorias").insert({"nome": n_c.strip()}).execute(); st.rerun()
         for cat in carregar_categorias():
             col1, col2 = st.columns([4, 1])
@@ -207,6 +215,7 @@ with aba_conf:
 
     with c2:
         st.write("### 📍 Origens")
+        # Mantido conforme configurado anteriormente
         n_o = st.text_input("Nova Origem:")
         if st.button("Add Origem"):
             if n_o: supabase.table("origens").insert({"nome": n_o.strip()}).execute(); st.rerun()
