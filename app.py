@@ -96,7 +96,7 @@ with aba_reg:
                     st.success("✅ Registro Criado!")
                     st.rerun()
 
-# --- ABA 2: LEITURA, EDIÇÃO E EXCLUSÃO (CRUD) ---
+# --- ABA 2: LEITURA, EDIÇÃO E EXCLUSÃO (CRUD OTIMIZADO) ---
 with aba_dash:
     st.subheader("📊 Gestão de Processos")
     res = supabase.table("registros").select("*").order("created_at", desc=True).execute()
@@ -104,49 +104,47 @@ with aba_dash:
     if res.data:
         df = pd.DataFrame(res.data)
         
-        # Barra de Ferramentas
         col_btn1, col_btn2, _ = st.columns([2, 2, 6])
-        if col_btn1.button("🔄 Atualizar"): st.rerun()
+        if col_btn1.button("🔄 Atualizar Panorama"): st.rerun()
         
-        # Tabela Customizada com Checkbox
         st.write("---")
         
-        # Estado para seleção em massa
-        if 'selecionados' not in st.session_state: st.session_state.selecionados = []
-
-        # Cabeçalho manual para controle total
-        h = st.columns([0.5, 1, 1.5, 1.5, 1, 3, 1])
+        # Cabeçalho da Tabela
+        h = st.columns([0.5, 0.8, 1.2, 1.5, 1, 3, 1, 1])
         h[0].write("**Sel.**")
         h[1].write("**ID**")
         h[2].write("**Data**")
         h[3].write("**Domínio**")
         h[4].write("**Comp.**")
         h[5].write("**Descrição**")
-        h[6].write("**Ação**")
+        h[6].write("**Editar**")
+        h[7].write("**Análise**")
 
         selecao_atual = []
 
         for _, row in df.iterrows():
-            c = st.columns([0.5, 1, 1.5, 1.5, 1, 3, 1])
+            # Ajustando o layout para incluir o botão de visualização
+            c = st.columns([0.5, 0.8, 1.2, 1.5, 1, 3, 1, 1])
             
-            # 1. Seleção (Checkbox)
             if c[0].checkbox("", key=f"sel_{row['id']}"):
                 selecao_atual.append(row['id'])
             
-            # 2. Dados
             c[1].write(row['id'])
             c[2].write(row['data'])
             c[3].write(row['dominio'])
             c[4].write(row['complexidade'])
-            c[5].write(row['descricao'][:80] + "...")
+            c[5].write(row['descricao'][:70] + "...")
             
-            # 3. Edição (Botão que abre Modal/Expander)
+            # Botão de Edição
             if c[6].button("📝", key=f"edit_{row['id']}"):
                 st.session_state[f"editing_{row['id']}"] = True
 
-            # Formulário de Edição (aparece abaixo da linha se clicado)
+            # Botão para Ver Análise da IA (O campo que estava faltando)
+            ver_analise = c[7].button("🔍", key=f"view_{row['id']}")
+
+            # 1. Área de Edição
             if st.session_state.get(f"editing_{row['id']}", False):
-                with st.expander(f"Editando Registro #{row['id']}", expanded=True):
+                with st.expander(f"✏️ Editando Registro #{row['id']}", expanded=True):
                     with st.form(f"f_edit_{row['id']}"):
                         ed_gatilho = st.text_input("Gatilho", value=row['gatilho'])
                         ed_desc = st.text_area("Descrição", value=row['descricao'])
@@ -160,16 +158,24 @@ with aba_dash:
                             st.session_state[f"editing_{row['id']}"] = False
                             st.rerun()
 
+            # 2. Área de Visualização da Análise IA
+            if ver_analise:
+                with st.chat_message("assistant"):
+                    st.markdown(f"**Análise Técnica do Registro #{row['id']}:**")
+                    st.write(row['mapeamento_ia'])
+                    if st.button("Fechar Análise", key=f"close_{row['id']}"):
+                        st.rerun()
+
         st.write("---")
         
-        # Ações em Massa no final
+        # Ação em Massa
         if selecao_atual:
-            if st.button(f"🔴 Excluir {len(selecao_atual)} selecionados", type="primary"):
+            if st.button(f"🔴 Excluir {len(selecao_atual)} itens selecionados", type="primary"):
                 supabase.table("registros").delete().in_("id", selecao_atual).execute()
-                st.success("Excluído com sucesso!")
+                st.success("Limpeza concluída!")
                 st.rerun()
     else:
-        st.info("Nenhum dado.")
+        st.info("Nenhum dado encontrado no Supabase.")
 
 # --- ABA 3: CONFIGURAÇÕES ---
 with aba_conf:
