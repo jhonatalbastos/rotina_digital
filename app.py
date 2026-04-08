@@ -9,45 +9,40 @@ import random
 st.set_page_config(page_title="Gêmeo Digital - Mapeamento", page_icon="🏗️", layout="wide")
 
 # --- CONEXÃO COM GOOGLE SHEETS ---
-# O parâmetro ttl=0 força o app a buscar dados novos sem cache de permissão
+# ttl=0 garante que o app ignore dados em cache e valide as permissões da Service Account em tempo real
 conn = st.connection("gsheets", type=GSheetsConnection, ttl=0)
 
 # --- FUNÇÕES DE SUPORTE ---
 
 def carregar_categorias_nuvem():
-    """Busca os domínios de trabalho na aba 'Categorias' da planilha."""
+    """Lê os domínios salvos na aba 'Categorias'."""
     try:
-        df_cat = conn.read(worksheet="Categorias")
+        st.cache_data.clear()
+        df_cat = conn.read(worksheet="Categorias", ttl=0)
         if not df_cat.empty and "Nome" in df_cat.columns:
-            return df_cat["Nome"].dropna().astype(str).tolist()
+            return [str(c).strip() for c in df_cat["Nome"].dropna().tolist() if str(c).strip()]
     except:
         pass
-    # Categorias padrão caso a aba esteja vazia ou inacessível
-    return ["Rotina Contábil", "Auditoria", "Gestão", "Fiscal"]
+    return ["Rotina Financeira", "Rotina Contábil", "Auditoria", "Gestão", "Fiscal"]
 
 def buscar_todas_as_chaves():
-    """Une as chaves fixas do Secrets com as chaves extras da aba 'Config'."""
+    """Consolida chaves dos Secrets e da aba 'Config'."""
     pool = []
-    # 1. Chaves dos Secrets (Segurança Máxima)
-    try:
-        if "GROQ_KEYS" in st.secrets:
-            secret_keys = st.secrets["GROQ_KEYS"].split("\n")
-            pool.extend([k.strip() for k in secret_keys if k.strip()])
-    except:
-        pass
+    if "GROQ_KEYS" in st.secrets:
+        secret_keys = st.secrets["GROQ_KEYS"].split("\n")
+        pool.extend([k.strip() for k in secret_keys if k.strip()])
     
-    # 2. Chaves extras da Planilha (Aba 'Config')
     try:
-        df_config = conn.read(worksheet="Config")
+        df_config = conn.read(worksheet="Config", ttl=0)
         if not df_config.empty and "Chaves" in df_config.columns:
             extras = df_config["Chaves"].dropna().astype(str).tolist()
             pool.extend([k.strip() for k in extras if k.strip()])
     except:
         pass
-    return list(set(pool)) # Remove duplicatas
+    return list(set(pool))
 
 def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=None):
-    """Realiza a transcrição e análise técnica via IA com rodízio de chaves."""
+    """Transcrição e análise com rodízio de chaves Groq."""
     chaves = buscar_todas_as_chaves()
     if not chaves: 
         return "⚠️ Nenhuma chave Groq configurada.", texto
@@ -60,18 +55,16 @@ def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=Non
     for chave in chaves:
         headers = {"Authorization": f"Bearer {chave}"}
         try:
-            # Processamento de Áudio (Whisper)
             if audio_file:
                 files = {"file": ("audio.wav", audio_file, "audio/wav"), "model": (None, "whisper-large-v3")}
                 res_audio = requests.post(url_transcreve, headers=headers, files=files)
                 if res_audio.status_code == 200:
                     texto_final = f"[Transcrição]: {res_audio.json()['text']}\n{texto}"
 
-            # Análise de Processo (Llama 3.3)
             payload = {
                 "model": "llama-3.3-70b-specdec",
                 "messages": [
-                    {"role": "system", "content": "Você é um Engenheiro de Processos especialista. Analise a rotina do Jhonata na FECD e mapeie a lógica operacional de forma estruturada."},
+                    {"role": "system", "content": "Você é um Engenheiro de Processos. Analise a rotina técnica e operacional de forma estruturada."},
                     {"role": "user", "content": f"Domínio: {categoria} | Gatilho: {gatilho} | Complexidade: {complexidade}\nDescrição: {texto_final}"}
                 ],
                 "temperature": 0.3
@@ -81,108 +74,80 @@ def analisar_processo_ia(texto, categoria, gatilho, complexidade, audio_file=Non
                 return res.json()['choices'][0]['message']['content'], texto_final
         except:
             continue
-    return "❌ Falha técnica: Verifique as chaves ou limites da API.", texto_final
+    return "❌ Erro na comunicação com a IA.", texto_final
 
-# --- INTERFACE PRINCIPAL ---
+# --- INTERFACE ---
 st.title("🏗️ Gêmeo Digital: Mapeamento de Inteligência")
 
-# Criação das abas de navegação
-aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Atividade", "📊 Panorama de Processos", "⚙️ Configurações"])
+aba_reg, aba_dash, aba_conf = st.tabs(["📝 Mapear Atividade", "📊 Panorama", "⚙️ Configurações"])
 
 with aba_reg:
     with st.form("form_mapping", clear_on_submit=True):
         c1, c2, c3 = st.columns(3)
         data_sel = c1.date_input("Data:", value=datetime.date.today())
-        
-        # Selectbox alimentado dinamicamente pela aba 'Categorias'
-        lista_cats = carregar_categorias_nuvem()
-        cat_sel = c2.selectbox("Domínio de Trabalho:", lista_cats)
-        
+        cat_sel = c2.selectbox("Domínio:", carregar_categorias_nuvem())
         comp_sel = c3.select_slider("Complexidade:", options=["Baixa", "Média", "Alta", "Crítica"])
         
-        gatilho = st.text_input("Gatilho (O que disparou esta ação?):")
-        audio_in = st.audio_input("Grave sua explicação (opcional)")
-        descricao = st.text_area("Descrição do Processo/Tarefa:")
+        gatilho = st.text_input("Gatilho:")
+        audio_in = st.audio_input("Explicação por voz")
+        descricao = st.text_area("Descrição do Processo:")
         
         if st.form_submit_button("Sincronizar com Nuvem"):
-            if not descricao and not audio_in:
-                st.warning("Por favor, forneça uma descrição ou grave um áudio.")
-            else:
-                with st.spinner("Engenheiro de IA analisando o processo..."):
-                    analise, texto_full = analisar_processo_ia(descricao, cat_sel, gatilho, comp_sel, audio_file=audio_in)
-                    
-                    # Preparação do dado para salvar na 'Página1'
-                    novo_registro = pd.DataFrame([{
-                        "Data": data_sel.strftime("%d/%m/%Y"), 
-                        "Dominio": cat_sel, 
-                        "Gatilho": gatilho, 
-                        "Complexidade": comp_sel, 
-                        "Descricao": texto_full, 
-                        "Mapeamento_IA": analise
-                    }])
-                    
-                    try:
-                        df_atual = conn.read(worksheet="Página1")
-                        df_final = pd.concat([df_atual, novo_registro], ignore_index=True)
-                        conn.update(worksheet="Página1", data=df_final)
-                        st.success("Processo mapeado e salvo na nuvem!")
-                        st.markdown(f"### 🤖 Análise Gerada:\n{analise}")
-                    except Exception as e:
-                        st.error(f"Erro ao salvar na planilha: {e}")
+            with st.spinner("Analisando..."):
+                analise, texto_full = analisar_processo_ia(descricao, cat_sel, gatilho, comp_sel, audio_file=audio_in)
+                novo_dado = pd.DataFrame([{
+                    "Data": data_sel.strftime("%d/%m/%Y"), "Dominio": cat_sel, 
+                    "Gatilho": gatilho, "Complexidade": comp_sel, 
+                    "Descricao": texto_full, "Mapeamento_IA": analise
+                }])
+                try:
+                    df_atual = conn.read(worksheet="Página1", ttl=0)
+                    df_final = pd.concat([df_atual, novo_dado], ignore_index=True)
+                    conn.update(worksheet="Página1", data=df_final)
+                    st.success("Salvo com sucesso!")
+                    st.markdown(f"### 🤖 Análise:\n{analise}")
+                except Exception as e:
+                    st.error(f"Erro ao salvar: {e}")
 
 with aba_dash:
-    st.subheader("📊 Histórico de Mapeamentos")
-    if st.button("🔄 Atualizar Panorama"):
-        st.rerun()
-        
+    st.subheader("📊 Histórico")
     try:
-        df_view = conn.read(worksheet="Página1")
-        if not df_view.empty:
-            # Exibe os mais recentes primeiro
-            st.dataframe(df_view.iloc[::-1], use_container_width=True)
-        else:
-            st.info("Nenhum registro encontrado na Página1.")
+        df_view = conn.read(worksheet="Página1", ttl=0)
+        st.dataframe(df_view.iloc[::-1], use_container_width=True)
     except:
-        st.error("Não foi possível carregar os dados. Verifique a aba 'Página1'.")
+        st.info("Nenhum dado disponível.")
 
 with aba_conf:
-    st.subheader("⚙️ Painel de Controle do Analista")
+    st.subheader("⚙️ Painel de Controle")
     
-    # --- SEÇÃO: DOMÍNIOS ---
-    st.markdown("### 📁 Gerenciar Domínios (Categorias)")
-    cats_atuais = carregar_categorias_nuvem()
-    texto_area = st.text_area("Edite os domínios (um por linha):", value="\n".join(cats_atuais), height=150)
+    # Gerenciar Categorias
+    st.markdown("### 📁 Domínios de Trabalho")
+    cats_lista = carregar_categorias_nuvem()
+    texto_area = st.text_area("Categorias (uma por linha):", value="\n".join(cats_lista), height=150)
     
     if st.button("Salvar Domínios"):
-        novas_cats = [c.strip() for c in texto_area.split("\n") if c.strip()]
-        df_cats_save = pd.DataFrame({"Nome": novas_cats})
+        novas = [c.strip() for c in texto_area.split("\n") if c.strip()]
+        df_cats = pd.DataFrame({"Nome": novas})
         try:
-            conn.update(worksheet="Categorias", data=df_cats_save)
-            st.success("Domínios atualizados na planilha!")
+            st.cache_data.clear()
+            conn.update(worksheet="Categorias", data=df_cats)
+            st.success("Domínios atualizados!")
             st.rerun()
         except Exception as e:
-            st.error(f"Erro ao atualizar categorias: {e}")
+            st.error(f"Erro técnico: {str(e)}")
 
     st.divider()
 
-    # --- SEÇÃO: CHAVES ---
-    st.markdown("### 🔑 Adicionar Chave Groq Extra")
-    nova_key = st.text_input("Cole aqui (gsk_...):", type="password")
-    
-    if st.button("Atualizar Chaves"):
+    # Gerenciar Chaves
+    st.markdown("### 🔑 Chaves Groq Extras")
+    nova_key = st.text_input("Nova chave (gsk_...):", type="password")
+    if st.button("Adicionar Chave"):
         if nova_key.startswith("gsk_"):
             try:
-                df_config = conn.read(worksheet="Config")
-                nova_linha = pd.DataFrame([{"Chaves": nova_key}])
-                df_config_final = pd.concat([df_config, nova_linha], ignore_index=True)
-                conn.update(worksheet="Config", data=df_config_final)
-                st.success("Chave adicionada ao pool de rodízio!")
+                df_c = conn.read(worksheet="Config", ttl=0)
+                df_n = pd.concat([df_c, pd.DataFrame([{"Chaves": nova_key}])], ignore_index=True)
+                conn.update(worksheet="Config", data=df_n)
+                st.success("Chave adicionada!")
                 st.rerun()
             except Exception as e:
-                st.error(f"Erro ao salvar chave: {e}")
-        else:
-            st.error("Formato de chave inválido.")
-
-    # Status do Pool
-    total_chaves = len(buscar_todas_as_chaves())
-    st.write(f"📡 Sistema operando com **{total_chaves}** chaves em rodízio.")
+                st.error(f"Erro: {e}")
